@@ -1,114 +1,241 @@
 <p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
+  <h1 align="center">🏥 Ez-HealthCare API</h1>
+  <p align="center">
+    <strong>Scalable, enterprise-grade backend RESTful API service for the Ez-HealthCare platform.</strong>
+  </p>
+  <p align="center">
+    <a href="https://nestjs.com/" target="_blank"><img src="https://img.shields.io/badge/NestJS-E0234E?style=for-the-badge&logo=nestjs&logoColor=white" alt="NestJS" /></a>
+    <a href="https://www.typescriptlang.org/" target="_blank"><img src="https://img.shields.io/badge/TypeScript-3178C6?style=for-the-badge&logo=typescript&logoColor=white" alt="TypeScript" /></a>
+    <a href="https://www.postgresql.org/" target="_blank"><img src="https://img.shields.io/badge/PostgreSQL-4169E1?style=for-the-badge&logo=postgresql&logoColor=white" alt="PostgreSQL" /></a>
+    <a href="https://typeorm.io/" target="_blank"><img src="https://img.shields.io/badge/TypeORM-FE0803?style=for-the-badge&logo=typeorm&logoColor=white" alt="TypeORM" /></a>
+    <a href="https://swagger.io/" target="_blank"><img src="https://img.shields.io/badge/Swagger-85EA2D?style=for-the-badge&logo=swagger&logoColor=black" alt="Swagger" /></a>
+  </p>
 </p>
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+---
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+## 📖 Overview
 
-## Description
+**Ez-HealthCare API** is the core backend service powering the Ez-HealthCare ecosystem. Engineered with **NestJS 12**, **TypeScript**, and **PostgreSQL**, this repository provides a high-performance, modular, and maintainable foundation for healthcare management, consultations, and medical service workflows.
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+### Key Highlights
 
-## Project setup
+- **Modern Architecture**: Clean modular structure following official NestJS enterprise patterns.
+- **Relational Persistence**: PostgreSQL with TypeORM for robust data mapping and seamless schema migrations.
+- **Interactive Documentation**: Auto-generated Swagger/OpenAPI documentation available out-of-the-box.
+- **Request Validation & Security**: Strict global validation pipes with DTO whitelist and payload sanitization via `class-validator` & `class-transformer`.
+- **Developer Experience**: Automated linting, formatting, and conventional commit enforcement powered by Husky, Commitlint, ESLint, Oxlint, and Prettier.
 
-```bash
-$ npm install
+---
+
+## 🛠 Tech Stack
+
+| Category                | Technology                                       |
+| :---------------------- | :----------------------------------------------- |
+| **Framework**           | [NestJS](https://nestjs.com/) v12                |
+| **Language**            | [TypeScript](https://www.typescriptlang.org/) v6 |
+| **Database**            | [PostgreSQL](https://www.postgresql.org/)        |
+| **ORM**                 | [TypeORM](https://typeorm.io/)                   |
+| **API Documentation**   | [Swagger / OpenAPI](https://swagger.io/)         |
+| **Validation**          | `class-validator`, `class-transformer`           |
+| **Testing**             | [Jest](https://jestjs.io/), Supertest            |
+| **Code Quality**        | ESLint, Oxlint, Prettier                         |
+| **Git Hooks & Commits** | Husky, Lint-Staged, Commitlint                   |
+
+---
+
+## 📂 Project Structure
+
+```text
+api/
+├── .husky/                  # Git hooks (pre-commit, commit-msg)
+├── src/
+│   ├── database/            # Database configuration, entities & migrations
+│   │   ├── entities/        # TypeORM entity definitions
+│   │   │   ├── base.entity.ts
+│   │   │   └── user.entity.ts
+│   │   ├── migrations/      # Version-controlled migration files
+│   │   ├── data-source.ts   # TypeORM CLI DataSource config
+│   │   └── database.module.ts
+│   ├── app.controller.ts    # Base health check & root controllers
+│   ├── app.module.ts        # Root application module
+│   ├── app.service.ts       # Base application service
+│   └── main.ts              # Application bootstrap & configuration
+├── test/                    # End-to-End (e2e) tests & Jest config
+├── .env.example             # Environment variable template
+├── .lintstagedrc.json       # Lint-staged configuration
+├── .commitlintrc.json       # Commitlint conventional commits config
+├── package.json             # Scripts & dependencies
+└── tsconfig.json            # TypeScript compiler configuration
 ```
 
-## Compile and run the project
+---
+
+## 🚀 Getting Started
+
+### Prerequisites
+
+Ensure you have the following installed on your machine:
+
+- **Node.js**: `v18.x` or `v20.x` or later
+- **npm**: `v9.x` or later
+- **PostgreSQL**: `v14+` running locally or via Docker
+
+---
+
+### Installation
+
+1. **Clone the repository:**
+
+   ```bash
+   git clone git@github.com:Ez-HealthCare/ez-healthcare-api.git
+   cd ez-healthcare-api
+   ```
+
+2. **Install dependencies:**
+
+   ```bash
+   npm install
+   ```
+
+3. **Configure Environment Variables:**
+   Copy the example environment file and configure your credentials:
+
+   ```bash
+   cp .env.example .env
+   ```
+
+   Configure the `.env` file with your PostgreSQL connection parameters:
+
+   ```env
+   # Application
+   PORT=3000
+   NODE_ENV=development
+
+   # PostgreSQL Database Configuration
+   DB_HOST=localhost
+   DB_PORT=5432
+   DB_USERNAME=postgres
+   DB_PASSWORD=postgres
+   DB_DATABASE=tlcn_api_db
+   DB_SYNC=false
+   DB_LOGGING=true
+   ```
+
+---
+
+## 🗄 Database & Migrations
+
+We use TypeORM migrations to track and execute schema changes safely.
+
+| Command                                                        | Description                                          |
+| :------------------------------------------------------------- | :--------------------------------------------------- |
+| `npm run migration:run`                                        | Executes all pending migrations                      |
+| `npm run migration:revert`                                     | Reverts the last executed migration                  |
+| `npm run migration:show`                                       | Displays the status of all migrations                |
+| `npm run migration:generate -- src/database/migrations/<Name>` | Generates a new migration from entity schema changes |
+| `npm run migration:create -- src/database/migrations/<Name>`   | Creates a blank migration file                       |
+
+> **Note**: For production and development safety, `DB_SYNC` should be set to `false`, and schema changes should always be applied via migrations.
+
+---
+
+## ⚡ Running the Application
 
 ```bash
-# development
-$ npm run start
+# Development mode with hot-reload
+npm run start:dev
 
-# watch mode
-$ npm run start:dev
+# Standard start
+npm run start
 
-# production mode
-$ npm run start:prod
+# Debug mode
+npm run start:debug
+
+# Production build & run
+npm run build
+npm run start:prod
 ```
 
-## Run tests
+Once started:
+
+- **REST API Base URL**: [http://localhost:3000/api](http://localhost:3000/api)
+- **Swagger Documentation**: [http://localhost:3000/api/docs](http://localhost:3000/api/docs)
+
+---
+
+## 🧪 Testing
 
 ```bash
-# unit tests
-$ npm run test
+# Unit tests
+npm run test
 
-# e2e tests
-$ npm run test:e2e
+# Unit tests in watch mode
+npm run test:watch
 
-# test coverage
-$ npm run test:cov
+# Test coverage report
+npm run test:cov
+
+# End-to-end (e2e) tests
+npm run test:e2e
 ```
 
-## Deployment
+---
 
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
+## 🎨 Code Quality & Conventions
 
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+### Formatting & Linting
 
 ```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
+# Run ESLint check
+npm run lint
+
+# Automatically fix ESLint errors
+npm run lint:fix
+
+# Ultra-fast linting with Oxlint
+npm run oxlint
+
+# Format code with Prettier
+npm run format
+
+# Verify formatting without writing
+npm run format:check
 ```
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+### Git Commit Guidelines
 
-## Observability
+This project strictly adheres to [Conventional Commits](https://www.conventionalcommits.org/) via **Commitlint** and **Husky**.
 
-In production applications, observability is essential for understanding how your system behaves, detecting issues early, and maintaining reliable performance.
+Format:
 
-[NestJS Observe](https://observe.nestjs.com) automatically instruments your NestJS application, giving you deep visibility into your system with minimal setup:
+```text
+<type>(<scope>): <subject>
+```
 
-- **Distributed tracing:** Follow requests across services and understand how they flow through your system.
-- **Waterfall analysis:** Visualize request execution and identify slow operations, bottlenecks, and unexpected delays.
-- **Performance analysis:** Analyze application performance in real time and quickly pinpoint areas that need optimization.
-- **Metrics:** Track key application and infrastructure metrics to understand system health and performance trends.
-- **Logging:** Centralize and correlate logs with traces and other telemetry to make debugging easier.
-- **Error tracking:** Detect errors quickly and investigate their root causes with the surrounding context.
-- **SLA monitoring:** Track service-level objectives and identify when your application is approaching or exceeding defined thresholds.
-- **Alarms and alerts:** Set up alerts for critical errors, performance degradation, SLA violations, and other anomalies so your team can react quickly.
+Common types:
 
-## Resources
+- `feat`: A new feature
+- `fix`: A bug fix
+- `docs`: Documentation changes
+- `style`: Formatting, missing semicolons, etc. (no code changes)
+- `refactor`: Refactoring production code
+- `test`: Adding or refactoring tests
+- `chore`: Updating build tasks, package manager configs, etc.
 
-Check out a few resources that may come in handy when working with NestJS:
+_Example:_ `feat(auth): implement jwt authentication strategy`
 
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Auto-instrument your application with [NestJS Observer](https://observer.nestjs.com). Distributed tracing, metrics, and logging made easy. Error tracking and performance monitoring for your NestJS applications.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
+---
 
-## Support
+## 🤝 Contributing
 
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
+1. Create a feature branch: `git checkout -b feat/your-feature-name`
+2. Commit your changes adhering to commitlint conventions
+3. Push to your branch: `git push origin feat/your-feature-name`
+4. Open a Pull Request
 
-## Stay in touch
+---
 
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
+## 📄 License
 
-## License
-
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+This project is licensed under private proprietary terms for Ez-HealthCare.
