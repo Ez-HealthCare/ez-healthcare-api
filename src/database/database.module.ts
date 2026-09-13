@@ -1,22 +1,21 @@
 import { Module } from '@nestjs/common';
-import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { ApiConfigService } from '../core/services/api-config.service';
 
 @Module({
   imports: [
     TypeOrmModule.forRootAsync({
-      imports: [ConfigModule],
-      inject: [ConfigService],
-      useFactory: (configService: ConfigService) => ({
-        type: 'postgres',
-        host: configService.get<string>('DB_HOST', 'localhost'),
-        port: configService.get<number>('DB_PORT', 5432),
-        username: configService.get<string>('DB_USERNAME', 'postgres'),
-        password: configService.get<string>('DB_PASSWORD', 'postgres'),
-        database: configService.get<string>('DB_DATABASE', 'tlcn_api_db'),
+      inject: [ApiConfigService],
+      useFactory: (apiConfig: ApiConfigService) => ({
+        type: apiConfig.dbType,
+        host: apiConfig.dbHost,
+        port: apiConfig.dbPort,
+        username: apiConfig.dbUsername,
+        password: apiConfig.dbPassword,
+        database: apiConfig.dbDatabase,
         autoLoadEntities: true,
-        synchronize: configService.get<string>('DB_SYNC') === 'true',
-        logging: configService.get<string>('DB_LOGGING') === 'true',
+        synchronize: apiConfig.dbSync,
+        logging: apiConfig.dbLogging,
       }),
     }),
   ],
