@@ -1,0 +1,7 @@
+export enum StepStatus {
+  PENDING = 'PENDING',
+  WAITING = 'WAITING',
+  IN_PROGRESS = 'IN_PROGRESS',
+  COMPLETED = 'COMPLETED',
+  SKIPPED = 'SKIPPED',
+}
