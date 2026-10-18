@@ -73,6 +73,36 @@ api/
 
 ## 🚀 Getting Started
 
+### Application configuration
+
+Import the global `ApiConfigModule` once in `AppModule`. Runtime consumers inject
+`ApiConfigService` from `src/config/api-config.service.ts`, not `ConfigService`,
+`dotenv` or `process.env`:
+
+```ts
+constructor(private readonly config: ApiConfigService) {}
+// this.config.database, .port, .jwtSecret, .signatureSecret,
+// .corsOrigins, .otpDelivery, .isProduction
+```
+
+The service reads `.env` through the installed Nest config module. Process env
+takes precedence. It parses port numbers/boolean flags, validates HTTP(S) mail
+URLs and exact CORS origins, and checks production JWT secrets before consumers
+initialize. Validation errors name the setting without echoing secret values.
+`DB_SYNC`/`DB_LOGGING` must be `true` or `false`; ports must be in 1–65535.
+Missing OTP delivery remains an explicit unavailable service, never a fake OTP.
+
+CLI/migration/seed code uses `ApiConfigService.fromEnvironment().database` after
+loading `.env` through that factory. This shares the same database parsing without
+requiring a Nest container, JWT or mail configuration. It does not open a database
+connection by itself. Static business values stay in `src/common/constants/`.
+ESLint prevents runtime consumers outside `src/config/` from bypassing this boundary.
+
+Existing defaults are preserved; production still requires a JWT secret of at
+least 32 characters. Set `SIGNATURE_SECRET` to a strong deployment-specific HMAC
+key: the legacy fallback is retained for compatibility, not a production key.
+See `.env.example`; never log or return the config object.
+
 ### Prerequisites
 
 Ensure you have the following installed on your machine:

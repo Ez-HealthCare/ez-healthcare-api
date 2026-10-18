@@ -1,5 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { IsEmail, IsNotEmpty } from 'class-validator';
+import { Transform } from 'class-transformer';
 
 export class RequestOtpDto {
   @ApiProperty({
@@ -8,5 +9,6 @@ export class RequestOtpDto {
   })
   @IsEmail({}, { message: 'Invalid email address format' })
   @IsNotEmpty()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim().toLowerCase() : value))
   email: string;
 }

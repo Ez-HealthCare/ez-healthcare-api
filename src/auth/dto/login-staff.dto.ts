@@ -1,5 +1,7 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsEmail, IsNotEmpty, MinLength } from 'class-validator';
+import { IsBoolean, IsEmail, IsNotEmpty, IsOptional, MinLength } from 'class-validator';
+import { Transform } from 'class-transformer';
+import { STAFF_PASSWORD_MIN_LENGTH } from '../../common/constants/auth.constants';
 
 export class LoginStaffDto {
   @ApiProperty({
@@ -8,10 +10,15 @@ export class LoginStaffDto {
   })
   @IsEmail({}, { message: 'Invalid email address format' })
   @IsNotEmpty()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim().toLowerCase() : value))
   email: string;
 
   @ApiProperty({ example: 'Doctor@123456', description: 'Password' })
   @IsNotEmpty()
-  @MinLength(6, { message: 'Password must be at least 6 characters' })
+  @MinLength(STAFF_PASSWORD_MIN_LENGTH, { message: 'Password must be at least 6 characters' })
   password: string;
+
+  @IsOptional()
+  @IsBoolean()
+  rememberMe?: boolean;
 }

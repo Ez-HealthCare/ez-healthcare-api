@@ -29,21 +29,15 @@ import { EmergencyDispatchDto, TransferClinicDto } from './dto/transfer-clinic.d
 import { ConcludeVisitDto } from './dto/conclude-visit.dto';
 import { toVisitDossier } from '../common/dto/response.dto';
 import { AuditService } from '../common/audit.service';
+import { ApiConfigService } from '../config/api-config.service';
 
-export const DRUG_CLASS_MAP: Record<string, string[]> = {
-  penicillin: [
-    'amoxicillin',
-    'ampicillin',
-    'oxacillin',
-    'piperacillin',
-    'nafcillin',
-    'dicloxacillin',
-  ],
-  sulfa: ['sulfamethoxazole', 'sulfasalazine', 'sulfadiazine', 'sulfacetamide'],
-  nsaid: ['aspirin', 'ibuprofen', 'naproxen', 'diclofenac', 'ketorolac', 'piroxicam', 'meloxicam'],
-  cephalosporin: ['cefazolin', 'cephalexin', 'ceftriaxone', 'cefepime', 'cefuroxime'],
-  fluoroquinolone: ['ciprofloxacin', 'levofloxacin', 'moxifloxacin', 'ofloxacin'],
-};
+import { DRUG_CLASS_MAP } from '../common/constants/visit.constants';
+import {
+  DEPARTMENT_CODES,
+  ELDERLY_PRIORITY_AGE,
+  VN_OFFSET_MS,
+  QUEUE_PRIORITY_DEFAULTS,
+} from '../common/constants/clinical.constants';
 
 function escapeRegExp(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -131,6 +125,7 @@ export class VisitService {
     private readonly itemRepository: Repository<PrescriptionItem>,
     private readonly dataSource: DataSource,
     private readonly auditService: AuditService,
+    private readonly config: ApiConfigService,
   ) {}
 
   private async resolveActorRole(
@@ -146,7 +141,6 @@ export class VisitService {
   }
 
   private getTodayBounds(): { start: Date; end: Date } {
-    const VN_OFFSET_MS = 7 * 60 * 60 * 1000;
     const nowUtc = Date.now();
     const vnNow = new Date(nowUtc + VN_OFFSET_MS);
 
@@ -425,7 +419,7 @@ export class VisitService {
         const ageDiffMs = Date.now() - new Date(visit.patient.dateOfBirth).getTime();
         const ageDate = new Date(ageDiffMs);
         const age = Math.abs(ageDate.getUTCFullYear() - 1970);
-        if (age >= 80) {
+        if (age >= ELDERLY_PRIORITY_AGE) {
           isPriority = true;
           priorityReason = priorityReason || 'Elderly patient over 80 years old';
         }
@@ -550,7 +544,9 @@ export class VisitService {
 
       vital.redFlagReason = dto.redFlagReason || defaultReason;
 
-      const erDept = await this.departmentRepository.findOne({ where: { code: 'P.001' } });
+      const erDept = await this.departmentRepository.findOne({
+        where: { code: DEPARTMENT_CODES.EMERGENCY },
+      });
       visit.status = VisitStatus.EMERGENCY_DISPATCHED;
       visit.isPriority = true;
       visit.priorityReason = 'STAT EMERGENCY: Red flag vitals detected at nurse station';
@@ -600,7 +596,9 @@ export class VisitService {
 
     assertTransition(visit.status, VisitStatus.EMERGENCY_DISPATCHED);
 
-    const erDept = await this.departmentRepository.findOne({ where: { code: 'P.001' } });
+    const erDept = await this.departmentRepository.findOne({
+      where: { code: DEPARTMENT_CODES.EMERGENCY },
+    });
     visit.status = VisitStatus.EMERGENCY_DISPATCHED;
     visit.isPriority = true;
     visit.priorityReason = `STAT EMERGENCY DISPATCH: ${dto.reason}`;
@@ -618,7 +616,7 @@ export class VisitService {
       targetEntityId: visit.id,
       metadata: {
         status: visit.status,
-        destinationRoom: 'P.001',
+        destinationRoom: DEPARTMENT_CODES.EMERGENCY,
         reason: dto.reason,
       },
     });
@@ -627,7 +625,7 @@ export class VisitService {
       visitId: visit.id,
       status: visit.status,
       reason: dto.reason,
-      destinationRoom: 'P.001',
+      destinationRoom: DEPARTMENT_CODES.EMERGENCY,
       alert: '🚨 STAT EMERGENCY DISPATCH TRIGGERED!',
     };
   }
@@ -737,10 +735,7 @@ export class VisitService {
         icd10Code: dto.icd10Code,
         timestamp: new Date().toISOString(),
       });
-      const digitalSignature = createHmac(
-        'sha256',
-        process.env.SIGNATURE_SECRET || 'ez-healthcare-dev-key',
-      )
+      const digitalSignature = createHmac('sha256', this.config.signatureSecret)
         .update(signaturePayload)
         .digest('hex');
 
@@ -840,7 +835,12 @@ export class VisitService {
       const dept = s.department;
       const queueWait = dept ? dept.avgServiceTimeMin * 2 : 10;
       const floorDiff = dept ? Math.abs(dept.floor - currentFloor) : 0;
-      const estimatedCost = Number((0.7 * queueWait + 0.3 * floorDiff).toFixed(2));
+      const estimatedCost = Number(
+        (
+          QUEUE_PRIORITY_DEFAULTS.alphaWaitWeight * queueWait +
+          QUEUE_PRIORITY_DEFAULTS.betaDistanceWeight * floorDiff
+        ).toFixed(2),
+      );
 
       return {
         stepId: s.id,

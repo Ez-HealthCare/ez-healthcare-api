@@ -1,208 +1,15 @@
 import * as bcrypt from 'bcrypt';
+import { SEED_USERS, SEED_DEPARTMENTS, SEED_RULES } from '../../common/constants/seed.constants';
+import { BCRYPT_SALT_ROUNDS } from '../../common/constants/auth.constants';
+import {
+  QUEUE_PRIORITY_CONFIG_KEY,
+  QUEUE_PRIORITY_DEFAULTS,
+} from '../../common/constants/clinical.constants';
 import dataSource from '../data-source';
 import { User } from '../entities/user.entity';
-import { Role } from '../../user/enums/role.enum';
 import { Department } from '../../department/entities/department.entity';
-import { RoomType } from '../../department/enums/room-type.enum';
 import { TriageRule } from '../../triage/entities/triage-rule.entity';
 import { SystemConfig } from '../../admin/entities/system-config.entity';
-
-const SEED_USERS = [
-  {
-    email: 'admin@ezhealthcare.com',
-    passwordRaw: 'Admin@123456',
-    name: 'Chief Administrator',
-    role: Role.ADMIN,
-    phone: '+1-555-0100',
-  },
-  {
-    email: 'dr.smith@ezhealthcare.com',
-    passwordRaw: 'Doctor@123456',
-    name: 'Dr. John Smith, MD',
-    role: Role.DOCTOR,
-    phone: '+1-555-0101',
-  },
-  {
-    email: 'dr.sarah@ezhealthcare.com',
-    passwordRaw: 'Doctor@123456',
-    name: 'Dr. Sarah Jenkins, FACS',
-    role: Role.DOCTOR,
-    phone: '+1-555-0102',
-  },
-  {
-    email: 'nurse.emily@ezhealthcare.com',
-    passwordRaw: 'Nurse@123456',
-    name: 'Emily Davis, BSN, RN',
-    role: Role.NURSE,
-    phone: '+1-555-0103',
-  },
-  {
-    email: 'reception.clara@ezhealthcare.com',
-    passwordRaw: 'Reception@123456',
-    name: 'Clara Oswald',
-    role: Role.RECEPTIONIST,
-    phone: '+1-555-0104',
-  },
-  {
-    email: 'lab.tech@ezhealthcare.com',
-    passwordRaw: 'Lab@123456',
-    name: 'Alex Turner, MLS',
-    role: Role.LAB_TECHNICIAN,
-    phone: '+1-555-0105',
-  },
-  {
-    email: 'er.staff@ezhealthcare.com',
-    passwordRaw: 'Emergency@123456',
-    name: 'Marcus Vance, EMT-P',
-    role: Role.EMERGENCY_STAFF,
-    phone: '+1-555-0106',
-  },
-  {
-    email: 'patient.david@example.com',
-    passwordRaw: 'Patient@123456',
-    name: 'David Miller',
-    role: Role.PATIENT,
-    nationalId: '079123456789',
-    insuranceCardNumber: 'DN4791234567890',
-    gender: 'MALE',
-    dateOfBirth: new Date('1988-06-12'),
-    allergies: ['Penicillin'],
-    phone: '+1-555-0199',
-  },
-  {
-    email: 'patient.elizabeth@example.com',
-    passwordRaw: 'Patient@123456',
-    name: 'Elizabeth Taylor',
-    role: Role.PATIENT,
-    nationalId: '079987654321',
-    insuranceCardNumber: 'GD4799876543210',
-    gender: 'FEMALE',
-    dateOfBirth: new Date('1944-02-18'), // 82 years old -> Priority
-    allergies: ['Aspirin', 'Sulfa'],
-    phone: '+1-555-0198',
-  },
-];
-
-const SEED_DEPARTMENTS = [
-  {
-    code: 'P.101',
-    name: 'Main Reception & Check-in Hall',
-    roomType: RoomType.RECEPTION,
-    floor: 1,
-    avgServiceTimeMin: 5,
-    maxQuotaPerSlot: 100,
-  },
-  {
-    code: 'P.102',
-    name: 'General Internal Medicine Clinic',
-    roomType: RoomType.CONSULTATION,
-    floor: 1,
-    avgServiceTimeMin: 15,
-    maxQuotaPerSlot: 40,
-  },
-  {
-    code: 'P.104',
-    name: 'Abdominal Ultrasound Imaging',
-    roomType: RoomType.IMAGING,
-    floor: 1,
-    avgServiceTimeMin: 12,
-    maxQuotaPerSlot: 30,
-  },
-  {
-    code: 'P.105',
-    name: 'Pulmonology Consultation Clinic',
-    roomType: RoomType.CONSULTATION,
-    floor: 1,
-    avgServiceTimeMin: 15,
-    maxQuotaPerSlot: 35,
-  },
-  {
-    code: 'P.108',
-    name: 'General Surgery Consultation Clinic',
-    roomType: RoomType.CONSULTATION,
-    floor: 1,
-    avgServiceTimeMin: 15,
-    maxQuotaPerSlot: 30,
-  },
-  {
-    code: 'P.201',
-    name: 'Hematology & Blood Laboratory',
-    roomType: RoomType.LABORATORY,
-    floor: 2,
-    avgServiceTimeMin: 8,
-    maxQuotaPerSlot: 60,
-  },
-  {
-    code: 'P.203',
-    name: 'Urinalysis Laboratory',
-    roomType: RoomType.LABORATORY,
-    floor: 2,
-    avgServiceTimeMin: 10,
-    maxQuotaPerSlot: 50,
-  },
-  {
-    code: 'P.302',
-    name: 'Chest X-Ray Imaging Suite',
-    roomType: RoomType.IMAGING,
-    floor: 3,
-    avgServiceTimeMin: 10,
-    maxQuotaPerSlot: 40,
-  },
-  {
-    code: 'P.001',
-    name: 'Emergency Resuscitation Unit (STAT)',
-    roomType: RoomType.EMERGENCY,
-    floor: 1,
-    avgServiceTimeMin: 5,
-    maxQuotaPerSlot: 20,
-  },
-];
-
-const SEED_RULES = [
-  {
-    symptomCode: 'SYM_FEVER_HIGH',
-    symptomName: 'High Fever > 38.5°C with Chills',
-    targetDeptCode: 'P.201',
-    isRedFlag: false,
-    priorityWeight: 2,
-  },
-  {
-    symptomCode: 'SYM_ABDOMINAL_PAIN',
-    symptomName: 'Persistent Epigastric Pain',
-    targetDeptCode: 'P.104',
-    isRedFlag: false,
-    priorityWeight: 2,
-  },
-  {
-    symptomCode: 'SYM_COUGH_CHEST',
-    symptomName: 'Productive Cough with Chest Tightness',
-    targetDeptCode: 'P.302',
-    isRedFlag: false,
-    contraindicationTags: ['PREGNANCY'],
-    priorityWeight: 1,
-  },
-  {
-    symptomCode: 'SYM_DYSURIA',
-    symptomName: 'Painful Urination and Urinary Frequency',
-    targetDeptCode: 'P.203',
-    isRedFlag: false,
-    priorityWeight: 1,
-  },
-  {
-    symptomCode: 'SYM_CHEST_PAIN_STAT',
-    symptomName: 'Acute Crushing Chest Pain, Suspected Myocardial Infarction',
-    targetDeptCode: 'P.001',
-    isRedFlag: true,
-    priorityWeight: 10,
-  },
-  {
-    symptomCode: 'SYM_SEVERE_HYPOXIA',
-    symptomName: 'Acute Respiratory Failure with SpO2 < 90%',
-    targetDeptCode: 'P.001',
-    isRedFlag: true,
-    priorityWeight: 10,
-  },
-];
 
 async function runSeed() {
   console.log('🔄 Initializing database connection for English Clinical Seed...');
@@ -216,7 +23,7 @@ async function runSeed() {
   // 1. Seed Users
   console.log('--- 1. SEEDING USERS & MEDICAL STAFF ---');
   for (const item of SEED_USERS) {
-    const hashedPassword = await bcrypt.hash(item.passwordRaw, 10);
+    const hashedPassword = await bcrypt.hash(item.passwordRaw, BCRYPT_SALT_ROUNDS);
     let user = await userRepo.findOne({ where: { email: item.email } });
     if (!user) {
       user = userRepo.create({
@@ -245,6 +52,12 @@ async function runSeed() {
       await userRepo.save(user);
       console.log(`ℹ️ Updated User [${item.role}]: ${item.email}`);
     }
+  }
+
+  if (process.argv.includes('--auth-only')) {
+    await dataSource.destroy();
+    console.log('Authentication seed completed for all roles.');
+    return;
   }
 
   // 2. Seed Departments
@@ -299,15 +112,11 @@ async function runSeed() {
 
   // 4. Seed System Config
   console.log('--- 4. SEEDING SYSTEM CONFIGS ---');
-  let config = await configRepo.findOne({ where: { configKey: 'BR-QUEUE-PRIORITY' } });
+  let config = await configRepo.findOne({ where: { configKey: QUEUE_PRIORITY_CONFIG_KEY } });
   if (!config) {
     config = configRepo.create({
-      configKey: 'BR-QUEUE-PRIORITY',
-      configValue: JSON.stringify({
-        alphaWaitWeight: 0.7,
-        betaDistanceWeight: 0.3,
-        autoPriorityRecall: true,
-      }),
+      configKey: QUEUE_PRIORITY_CONFIG_KEY,
+      configValue: JSON.stringify(QUEUE_PRIORITY_DEFAULTS),
       description: 'Queue priority weighting parameters for recommendation heuristic',
       version: 1,
     });

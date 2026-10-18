@@ -10,6 +10,7 @@ import { Visit } from '../visit/entities/visit.entity';
 import { VisitOrder } from '../visit/entities/visit-order.entity';
 import { VisitStep } from '../visit/entities/visit-step.entity';
 import { Department } from '../department/entities/department.entity';
+import { DEPARTMENT_CODES } from '../common/constants/clinical.constants';
 import { TriageRule } from './entities/triage-rule.entity';
 import { StepStatus } from '../visit/enums/step-status.enum';
 import { VisitStatus } from '../visit/enums/visit-status.enum';
@@ -128,7 +129,9 @@ export class TriageDagService {
     assertTransition(visit.status, targetStatus);
 
     if (isStat) {
-      const emergencyDept = await this.departmentRepository.findOne({ where: { code: 'P.001' } });
+      const emergencyDept = await this.departmentRepository.findOne({
+        where: { code: DEPARTMENT_CODES.EMERGENCY },
+      });
       visit.status = VisitStatus.EMERGENCY_DISPATCHED;
       visit.currentDepartmentId = emergencyDept ? emergencyDept.id : visit.initialDepartmentId;
       await this.visitRepository.save(visit);
@@ -150,20 +153,22 @@ export class TriageDagService {
 
       return {
         isStatEmergency: true,
-        destinationRoom: 'P.001',
+        destinationRoom: DEPARTMENT_CODES.EMERGENCY,
         alert: '🚨 STAT EMERGENCY PROTOCOL ACTIVATED: Immediate transfer to P.001 Emergency Unit!',
       };
     }
 
     // 2. Radiation Hazard Intercept
-    if (dto.pregnancySuspected && dto.orders.includes('P.302')) {
+    if (dto.pregnancySuspected && dto.orders.includes(DEPARTMENT_CODES.CHEST_XRAY)) {
       throw new UnprocessableEntityException(
         'RADIATION HAZARD: Chest X-Ray P.302 is contraindicated for pregnant patients. Please substitute with Ultrasound or MRI.',
       );
     }
 
     // 3. Graph Vertices & Directed Edges
-    const clinicCode = visit.initialDepartment ? visit.initialDepartment.code : 'P.102';
+    const clinicCode = visit.initialDepartment
+      ? visit.initialDepartment.code
+      : DEPARTMENT_CODES.GENERAL_MEDICINE;
     const cleanOrders = Array.from(new Set(dto.orders.filter((c) => c !== clinicCode)));
     const vertices = [...cleanOrders, clinicCode];
     const edges: DagEdge[] = [];
@@ -179,10 +184,13 @@ export class TriageDagService {
     }
 
     // Physiological prerequisite: Abdominal Ultrasound P.104 before Urinalysis P.203
-    if (cleanOrders.includes('P.104') && cleanOrders.includes('P.203')) {
+    if (
+      cleanOrders.includes(DEPARTMENT_CODES.ULTRASOUND) &&
+      cleanOrders.includes(DEPARTMENT_CODES.URINALYSIS)
+    ) {
       edges.push({
-        from: 'P.104',
-        to: 'P.203',
+        from: DEPARTMENT_CODES.ULTRASOUND,
+        to: DEPARTMENT_CODES.URINALYSIS,
         type: 'PHYSIOLOGICAL_PREREQUISITE',
         reason: 'Abdominal ultrasound requires full bladder prior to urinalysis voiding',
       });

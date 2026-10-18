@@ -5,68 +5,87 @@ import {
   HttpCode,
   HttpStatus,
   Post,
-  Request,
+  Req,
+  Res,
   UseGuards,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import type { Request, Response } from 'express';
+import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { AuthService } from './auth.service';
+import { ApiConfigService } from '../config/api-config.service';
 import { RequestOtpDto } from './dto/request-otp.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { LoginStaffDto } from './dto/login-staff.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { toMeResponse } from '../common/dto/response.dto';
+import { clearSessionCookies, readCookie, setSessionCookies } from './auth.config';
+import {
+  AUTH_CONTROLLER_PATH,
+  AUTH_PATHS,
+  REFRESH_COOKIE,
+} from '../common/constants/auth.constants';
 
 @ApiTags('Authentication')
-@Controller('auth')
+@Controller(AUTH_CONTROLLER_PATH)
 export class AuthController {
-  constructor(private readonly authService: AuthService) {}
+  constructor(
+    private readonly authService: AuthService,
+    private readonly config: ApiConfigService,
+  ) {}
 
-  @Post('patient/request-otp')
+  private sendSession(res: Response, session: Awaited<ReturnType<AuthService['loginStaff']>>) {
+    setSessionCookies(res, session, this.config.isProduction);
+    // Refresh tokens are only delivered through the HttpOnly cookie.
+    return { accessToken: session.accessToken, expiresIn: session.expiresIn };
+  }
+
+  @Post(AUTH_PATHS.REQUEST_OTP)
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Request 6-digit OTP code for patient login/registration' })
-  @ApiResponse({ status: 200, description: 'OTP dispatched successfully' })
-  @ApiResponse({ status: 400, description: 'Invalid email address' })
-  @ApiResponse({
-    status: 429,
-    description: 'Account locked for 15 minutes due to multiple failures',
-  })
-  async requestOtp(@Body() dto: RequestOtpDto) {
+  @ApiOperation({ summary: 'Send a 6-digit patient login code by email' })
+  requestOtp(@Body() dto: RequestOtpDto) {
     return this.authService.requestPatientOtp(dto);
   }
 
-  @Post('patient/verify-otp')
+  @Post(AUTH_PATHS.VERIFY_OTP)
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Verify patient OTP and retrieve JWT session token' })
-  @ApiResponse({ status: 200, description: 'Patient authenticated successfully' })
-  @ApiResponse({ status: 400, description: 'Invalid or expired OTP code' })
-  @ApiResponse({ status: 429, description: 'Account locked due to 3 failed attempts' })
-  async verifyOtp(@Body() dto: VerifyOtpDto) {
-    return this.authService.verifyPatientOtp(dto);
+  @ApiOperation({ summary: 'Verify patient OTP and create an HttpOnly cookie session' })
+  async verifyOtp(@Body() dto: VerifyOtpDto, @Res({ passthrough: true }) res: Response) {
+    return this.sendSession(res, await this.authService.verifyPatientOtp(dto));
   }
 
-  @Post('staff/login')
+  @Post(AUTH_PATHS.STAFF_LOGIN)
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({
-    summary: 'Healthcare staff login (Doctor, Nurse, Receptionist, Lab Tech, Admin)',
-  })
-  @ApiResponse({ status: 200, description: 'Staff authenticated successfully' })
-  @ApiResponse({ status: 401, description: 'Invalid email or password' })
-  async loginStaff(@Body() dto: LoginStaffDto) {
-    return this.authService.loginStaff(dto);
+  @ApiOperation({ summary: 'Authenticate any staff role with email and password' })
+  async loginStaff(@Body() dto: LoginStaffDto, @Res({ passthrough: true }) res: Response) {
+    return this.sendSession(res, await this.authService.loginStaff(dto));
   }
 
-  @Get('me')
+  @Post(AUTH_PATHS.REFRESH)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Rotate the HttpOnly refresh token and renew the access token' })
+  async refresh(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
+    try {
+      return this.sendSession(res, await this.authService.refresh(readCookie(req, REFRESH_COOKIE)));
+    } catch (error) {
+      clearSessionCookies(res, this.config.isProduction);
+      throw error;
+    }
+  }
+
+  @Post(AUTH_PATHS.LOGOUT)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Revoke the current session and clear its cookies' })
+  async logout(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
+    const result = await this.authService.logout(readCookie(req, REFRESH_COOKIE));
+    clearSessionCookies(res, this.config.isProduction);
+    return result;
+  }
+
+  @Get(AUTH_PATHS.ME)
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Verify accessToken and retrieve authenticated user profile and role' })
-  @ApiResponse({
-    status: 200,
-    description: 'Verified user profile with role returned — password is never included',
-  })
-  @ApiResponse({ status: 401, description: 'Token is invalid, expired, or account deactivated' })
-  async getMe(@Request() req: any) {
-    // toMeResponse whitelists exactly which fields are safe to return;
-    // adding a new sensitive column to the entity will NOT leak it here.
+  @ApiOperation({ summary: 'Return the authenticated identity and role, without password' })
+  getMe(@Req() req: Request & { user: unknown }) {
     return toMeResponse(req.user);
   }
 }

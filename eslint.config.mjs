@@ -22,6 +22,36 @@ export default [
   },
   eslintConfigPrettier,
   {
+    files: ['src/**/*.ts'],
+    ignores: ['src/config/**', 'src/**/*.spec.ts'],
+    rules: {
+      'no-restricted-properties': [
+        'error',
+        {
+          object: 'process',
+          property: 'env',
+          message: 'Inject ApiConfigService instead of reading environment variables here.',
+        },
+      ],
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [
+            { name: '@nestjs/config', message: 'Inject ApiConfigService instead.' },
+            {
+              name: 'dotenv',
+              message: 'Load environment through ApiConfigService.fromEnvironment().',
+            },
+            {
+              name: 'dotenv/config',
+              message: 'Load environment through ApiConfigService.fromEnvironment().',
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
     ignores: ['dist/**', 'node_modules/**', 'coverage/**'],
   },
 ];

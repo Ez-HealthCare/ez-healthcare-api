@@ -4,6 +4,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { TriageRule } from './entities/triage-rule.entity';
 import { Department } from '../department/entities/department.entity';
+import { DEPARTMENT_CODES, ELDERLY_PRIORITY_AGE } from '../common/constants/clinical.constants';
 import { RecommendTriageDto } from './dto/recommend-triage.dto';
 
 @ApiTags('Clinical Triage & Routing Engine')
@@ -60,19 +61,21 @@ export class TriageController {
           recommendedDepartment: rule.targetDepartment,
           matchedRule: rule,
           urgencyLevel: 'ROUTINE',
-          isElderlyPriority: (dto.age ?? 0) >= 80,
+          isElderlyPriority: (dto.age ?? 0) >= ELDERLY_PRIORITY_AGE,
           message: `Recommended clinic based on matched symptom: ${rule.symptomName}`,
         };
       }
     }
 
     // 3. Fallback: General Internal Medicine (P.102)
-    const defaultClinic = await this.departmentRepository.findOne({ where: { code: 'P.102' } });
+    const defaultClinic = await this.departmentRepository.findOne({
+      where: { code: DEPARTMENT_CODES.GENERAL_MEDICINE },
+    });
     return {
       isRedFlag: false,
       recommendedDepartment: defaultClinic,
       urgencyLevel: 'ROUTINE',
-      isElderlyPriority: (dto.age ?? 0) >= 80,
+      isElderlyPriority: (dto.age ?? 0) >= ELDERLY_PRIORITY_AGE,
       message: 'Default recommendation: General Internal Medicine Clinic',
     };
   }

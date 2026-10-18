@@ -1,6 +1,7 @@
 import { ConflictException } from '@nestjs/common';
 import { VisitStatus } from './enums/visit-status.enum';
-import { assertTransition, VALID_TRANSITIONS } from './visit-state-machine';
+import { assertTransition } from './visit-state-machine';
+import { VALID_TRANSITIONS } from '../common/constants/visit.constants';
 
 describe('Visit State Machine (assertTransition)', () => {
   // Independent valid transition pairs specified according to outpatient clinical workflow rules

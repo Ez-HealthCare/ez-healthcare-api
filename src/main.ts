@@ -1,22 +1,15 @@
-import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
+import { configureAuthHttp } from './auth/configure-auth-http';
+import { API_PREFIX, SWAGGER_PATH } from './common/constants/app.constants';
+import { ApiConfigService } from './config/api-config.service';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
-  // Global prefix
-  app.setGlobalPrefix('api');
-
-  // Global validation pipe
-  app.useGlobalPipes(
-    new ValidationPipe({
-      whitelist: true,
-      forbidNonWhitelisted: true,
-      transform: true,
-    }),
-  );
+  const apiConfig = app.get(ApiConfigService);
+  configureAuthHttp(app, apiConfig);
 
   // Swagger Documentation
   const config = new DocumentBuilder()
@@ -26,11 +19,11 @@ async function bootstrap() {
     .addBearerAuth()
     .build();
   const document = SwaggerModule.createDocument(app, config);
-  SwaggerModule.setup('api/docs', app, document);
+  SwaggerModule.setup(SWAGGER_PATH, app, document);
 
-  const port = process.env.PORT ?? 3000;
+  const port = apiConfig.port;
   await app.listen(port);
-  console.log(`Application is running on: http://localhost:${port}/api`);
-  console.log(`Swagger documentation: http://localhost:${port}/api/docs`);
+  console.log(`Application is running on: http://localhost:${port}/${API_PREFIX}`);
+  console.log(`Swagger documentation: http://localhost:${port}/${SWAGGER_PATH}`);
 }
 bootstrap();

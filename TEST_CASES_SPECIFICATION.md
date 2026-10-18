@@ -32,21 +32,34 @@ _(Covers UC-PAT-01, UC-ADM-03)_
 - **Pre-conditions:** Patient device connected to the internet.
 - **Steps:**
   1. `POST /auth/patient/request-otp` with body `{ "email": "patient.john@example.com" }`.
-  2. System creates/refreshes OTP record, sets expiration to +5 minutes, and outputs code (Console in DEV / SMTP in PROD).
+  2. System delivers a random OTP through the configured mail send API, stores only its hash, and sets expiration to +5 minutes. Docker tests read the email from Mailpit; the API never returns or logs the code.
   3. Patient submits `POST /auth/patient/verify-otp` with body `{ "email": "patient.john@example.com", "otpCode": "123456" }`.
 - **Expected Result:**
   - Status code: `200 OK`.
-  - Response payload contains `{ "accessToken": string, "user": { "id": UUID, "email": string, "role": "PATIENT" } }`.
+  - API response contains `{ "accessToken": string, "expiresIn": 900 }` plus HttpOnly access/refresh cookies. The dashboard proxy removes the token from its JSON response.
+  - `GET /auth/me` with the session cookie returns the patient's identity and `role: "PATIENT"`, without a password.
   - Database: User record created if non-existent; OTP marked `isUsed = true`.
 
-#### `TC-AUTH-02`: Healthcare Staff Login with Role-Based Access Control
+#### `TC-AUTH-02`: Healthcare Staff Login and Role Identification
 
 - **Description:** Staff member (Doctor, Nurse, Receptionist, Lab Tech, Admin) logs in with valid email and password.
 - **Steps:**
   1. `POST /auth/staff/login` with credentials `{ "email": "dr.smith@ezhealthcare.com", "password": "Doctor@123456" }`.
 - **Expected Result:**
   - Status code: `200 OK`.
-  - Response contains JWT access token and refresh token with embedded claim `{ "role": "DOCTOR" }`.
+  - API response contains a JWT access token and expiry; the refresh token is only sent in an HttpOnly cookie.
+  - `GET /auth/me` returns the actual staff role. Test ADMIN, DOCTOR, NURSE, RECEPTIONIST, LAB_TECHNICIAN, and EMERGENCY_STAFF.
+  - The dashboard currently accepts every authenticated role and shows the real identity. Feature-level permissions and separate role workspaces are deferred.
+
+#### `TC-AUTH-03`: Session Restoration, Rotation and Logout
+
+- `POST /auth/refresh` uses the HttpOnly refresh cookie, rotates it, and renews the 15-minute access token. Reusing the previous refresh token returns `401`.
+- `rememberMe: false` creates a browser-session refresh cookie with an 8-hour server limit; `true` persists the cookie for up to 30 days.
+- Cookies use HttpOnly and SameSite=Lax, plus Secure in production. No tokens are stored in localStorage.
+- `POST /auth/logout` revokes the session and clears cookies. Both access and refresh tokens for that session must then be rejected.
+- Expired access tokens return `401`; a valid refresh cookie restores the dashboard session.
+- CORS credentials are limited to configured origins; auth mutations from foreign origins return `403`.
+- Runnable checks: real `AuthService` unit tests in this repo; `npm run test:auth` and the Chromium Docker test profile in `../dashboard`.
 
 ---
 
@@ -64,7 +77,7 @@ _(Covers UC-PAT-01, UC-ADM-03)_
 - **Trigger:** Patient enters wrong OTP code (e.g., `999999` instead of `123456`).
 - **Expected Result:**
   - Status code: `400 Bad Request`.
-  - Response body: `{ "statusCode": 400, "message": "Invalid OTP code. 2 attempts remaining.", "error": "Bad Request" }`.
+  - Response message: `Invalid OTP code.`
   - Database: `failedAttempts` incremented to `1`.
 
 #### `TC-AUTH-ERR-03`: Exceeded Failed Attempts — 15-Minute Account Lockout
@@ -72,7 +85,7 @@ _(Covers UC-PAT-01, UC-ADM-03)_
 - **Trigger:** Patient enters wrong OTP code 3 consecutive times.
 - **Expected Result:**
   - Status code: `429 Too Many Requests`.
-  - Response body: `{ "statusCode": 429, "message": "Too many failed attempts. Verification locked for 15 minutes.", "error": "Too Many Requests" }`.
+  - Response message indicates too many failed attempts and a 15-minute wait.
   - Database: `lockedUntil` set to `NOW() + 15 minutes`. Any subsequent OTP request within this window returns `429`.
 
 #### `TC-AUTH-ERR-04`: Expired OTP Code Submission
@@ -80,7 +93,7 @@ _(Covers UC-PAT-01, UC-ADM-03)_
 - **Trigger:** Patient submits correct OTP after expiration time (> 5 minutes).
 - **Expected Result:**
   - Status code: `400 Bad Request`.
-  - Response body: `{ "statusCode": 400, "message": "OTP code has expired. Please request a new code.", "error": "Bad Request" }`.
+  - Response message: `OTP has expired.`
 
 #### `TC-AUTH-ERR-05`: Unauthorized Route Access (Missing Token)
 
