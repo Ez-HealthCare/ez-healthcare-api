@@ -73,7 +73,62 @@ api/
 
 ## 🚀 Getting Started
 
+### Partner startup on branch repair
+
+Keep sibling folders named `api` and `dashboard`, both on `repair`. Follow the
+[PowerShell team quick start](https://github.com/Ez-HealthCare/ez-healthcare-dashboard/blob/repair/README.md#partner-quick-start-powershell)
+for either the all-Docker demo or local FE/BE with Docker DB/Mailpit. It includes
+first-time env setup, migration/seed, URLs, demo accounts and stop commands.
+
+Daily local API command is `npm run dev` (or `npm run start:dev`), port **3000**;
+dashboard `npm run dev` uses **3001**. Start the database configured in this repo's
+`.env` and Mailpit first. Do not start Docker API alongside the local API.
+Node.js **24** is the validated runtime. Real `.env`/secrets are not in Git:
+copy `.env.example` only if `.env` does not exist, then set your own credentials.
+
+An existing developer DB may use 5432; the isolated dashboard Compose auth-test
+DB uses 5434. Preserve existing DB settings/data. On a fresh isolated test DB only:
+
+```powershell
+npm ci
+npm run build
+node --loader ./esm-loader.mjs dist/database/setup.js
+node --loader ./esm-loader.mjs dist/database/seeds/seed.js --auth-only
+npm run dev
+```
+
+`setup.js` runs all pending migrations; the seed command writes demo accounts.
+For an existing DB, back up and inspect pending migrations first, then approve
+the required changes instead of blindly running setup/seed. Never reset a volume
+to fix an auth error. Read-only migration status after building:
+
+```powershell
+node --loader ./esm-loader.mjs node_modules/typeorm/cli.js migration:show -d dist/database/data-source.js
+```
+
+`AddAuthSessions1792050000000` is required for current auth: it creates
+`auth_sessions`, widens `patient_otps.otpCode` from varchar(10) to varchar(64), and
+invalidates old OTPs. Without it an email can arrive but OTP persistence returns 500. A migration executed on another machine is not applied to your DB by Git
+pull. Request a fresh OTP after migration; observe the 60-second resend limit.
+Do not truncate hashes or enable `DB_SYNC` as a workaround. The earlier local
+auth repair applied only this migration; NEWS2/audit remains pending on that DB.
+
 ### Application configuration
+
+Local startup: configure this repo's ignored `.env` (`PORT=3000`, database
+credentials, JWT/signature keys, `CORS_ORIGINS=http://localhost:3001` and
+`OTP_DELIVERY_URL=http://localhost:8025/api/v1/send`). Copy `.env.example` only
+on first setup; do not overwrite existing credentials. Start that database and
+Mailpit before using `npm run dev` (alias of `npm run start:dev`). Frontend runs
+separately on port 3001 with `npm run dev` in `../dashboard`.
+
+All npm start variants reuse `esm-loader.mjs` for the existing extensionless ESM
+imports, matching Docker. `start`/`start:dev`/`start:debug` use the Nest CLI's shell
+exec option; `start:prod` runs the compiled entry with the same loader. Port comes
+from `ApiConfigService` and `.env` (default 3000); process env overrides still apply.
+Do not run the Docker API and local API simultaneously on port 3000. This repo's
+local database and the dashboard Compose auth-test database are distinct; preserve
+the configured credentials/database and do not reseed or recreate volumes to start.
 
 Import the global `ApiConfigModule` once in `AppModule`. Runtime consumers inject
 `ApiConfigService` from `src/config/api-config.service.ts`, not `ConfigService`,
@@ -107,7 +162,7 @@ See `.env.example`; never log or return the config object.
 
 Ensure you have the following installed on your machine:
 
-- **Node.js**: `v18.x` or `v20.x` or later
+- **Node.js**: `v24.x` (validated local/Docker runtime)
 - **npm**: `v9.x` or later
 - **PostgreSQL**: `v14+` running locally or via Docker
 
