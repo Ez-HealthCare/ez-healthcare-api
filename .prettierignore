@@ -3,3 +3,5 @@ node_modules
 coverage
 .husky
 package-lock.json
+AGENTS.md
+CLAUDE.md

@@ -19,8 +19,16 @@ describe('Visit State Machine (assertTransition)', () => {
     [VisitStatus.TRIAGE_PENDING, VisitStatus.EMERGENCY_DISPATCHED],
 
     // CLINIC_WAITING
-    [VisitStatus.CLINIC_WAITING, VisitStatus.IN_EXAMINATION],
+    [VisitStatus.CLINIC_WAITING, VisitStatus.CLINIC_CALLED],
     [VisitStatus.CLINIC_WAITING, VisitStatus.EMERGENCY_DISPATCHED],
+
+    // CLINIC_CALLED
+    [VisitStatus.CLINIC_CALLED, VisitStatus.CLINIC_CALLED],
+    [VisitStatus.CLINIC_CALLED, VisitStatus.TEMPORARILY_ABSENT],
+    [VisitStatus.CLINIC_CALLED, VisitStatus.IN_EXAMINATION],
+
+    // TEMPORARILY_ABSENT
+    [VisitStatus.TEMPORARILY_ABSENT, VisitStatus.CLINIC_WAITING],
 
     // IN_EXAMINATION
     [VisitStatus.IN_EXAMINATION, VisitStatus.PARACLINICAL_PENDING],
@@ -53,11 +61,11 @@ describe('Visit State Machine (assertTransition)', () => {
   }
 
   describe('Transition Matrix Integrity', () => {
-    it('should have exactly 15 valid pairs and 85 invalid pairs across all 10 statuses', () => {
-      expect(ALL_STATUSES).toHaveLength(10);
-      expect(INDEPENDENT_VALID_TRANSITIONS).toHaveLength(15);
-      expect(ALL_INVALID_TRANSITIONS).toHaveLength(85);
-      expect(INDEPENDENT_VALID_TRANSITIONS.length + ALL_INVALID_TRANSITIONS.length).toBe(100);
+    it('covers every pair across the 12 statuses', () => {
+      expect(ALL_STATUSES).toHaveLength(12);
+      expect(INDEPENDENT_VALID_TRANSITIONS).toHaveLength(19);
+      expect(ALL_INVALID_TRANSITIONS).toHaveLength(125);
+      expect(INDEPENDENT_VALID_TRANSITIONS.length + ALL_INVALID_TRANSITIONS.length).toBe(144);
     });
 
     it('should match the source VALID_TRANSITIONS configuration exactly', () => {

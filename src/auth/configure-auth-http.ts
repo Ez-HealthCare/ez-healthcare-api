@@ -22,7 +22,7 @@ export function configureAuthHttp(app: INestApplication, config: ApiConfigServic
   app.enableCors({
     origin: origins,
     credentials: true,
-    methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   });
   // ponytail: per-process rate limit; use a shared limiter before running multiple API replicas.
   const attempts = new Map<string, { count: number; until: number }>();

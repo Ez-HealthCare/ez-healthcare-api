@@ -18,6 +18,23 @@
 
 **Ez-HealthCare API** is the core backend service powering the Ez-HealthCare ecosystem. Engineered with **NestJS 12**, **TypeScript**, and **PostgreSQL**, this repository provides a high-performance, modular, and maintainable foundation for healthcare management, consultations, and medical service workflows.
 
+### Phase B outpatient flow
+
+The live flow is `patient hall ticket → nurse/reception verification and intake →
+room assignment and clinic ticket → scheduled doctor call/start examination`.
+Queue counters are atomic PostgreSQL upserts keyed by ticket kind, room and
+business date; tickets retain reissue history and issuing mutations require an
+`Idempotency-Key`. The business timezone is `Asia/Ho_Chi_Minh`; configure the two
+daily issuance windows with `QUEUE_ISSUANCE_WINDOWS`.
+
+PATIENT is owner-scoped, NURSE (and legacy RECEPTIONIST) operates reception,
+DOCTOR is restricted by `DoctorSchedule`, and ADMIN has no implicit clinical
+permission. Notifications are persisted and exposed through list/read endpoints.
+Phase C adds transactional clinical mutations, one-current-ticket database
+constraints, concurrent idempotency replay and API-boundary expiration. Staff can
+list expired hall tickets at `GET /visits/reception/expired` and reissue them while
+preserving the original Visit and ticket history.
+
 ### Key Highlights
 
 - **Modern Architecture**: Clean modular structure following official NestJS enterprise patterns.
@@ -93,11 +110,12 @@ DB uses 5434. Preserve existing DB settings/data. On a fresh isolated test DB on
 npm ci
 npm run build
 node --loader ./esm-loader.mjs dist/database/setup.js
-node --loader ./esm-loader.mjs dist/database/seeds/seed.js --auth-only
+node --loader ./esm-loader.mjs dist/database/seeds/seed.js
 npm run dev
 ```
 
-`setup.js` runs all pending migrations; the seed command writes demo accounts.
+`setup.js` runs all pending migrations; the full idempotent seed writes demo
+accounts, departments, triage rules and today's doctor schedules.
 For an existing DB, back up and inspect pending migrations first, then approve
 the required changes instead of blindly running setup/seed. Never reset a volume
 to fix an auth error. Read-only migration status after building:
@@ -252,6 +270,9 @@ Once started:
 ## 🧪 Testing
 
 ```bash
+# Format, lint, unit tests and build
+npm run validate
+
 # Unit tests
 npm run test
 
@@ -263,6 +284,10 @@ npm run test:cov
 
 # End-to-end (e2e) tests
 npm run test:e2e
+
+# Disposable PostgreSQL 17 integration (tmpfs; does not touch the demo volume)
+docker compose -f compose.integration.yml up --build --abort-on-container-exit --exit-code-from integration-tests
+docker compose -f compose.integration.yml down
 ```
 
 ---

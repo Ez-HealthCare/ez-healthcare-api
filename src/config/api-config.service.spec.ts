@@ -30,6 +30,7 @@ const keys = [
   'DB_DATABASE',
   'DB_SYNC',
   'DB_LOGGING',
+  'QUEUE_ISSUANCE_WINDOWS',
 ];
 function environment(values: Record<string, string> = {}) {
   // Explicit empty values prevent developer-shell/.env values affecting unit fixtures.
@@ -143,6 +144,26 @@ describe('ApiConfigService', () => {
     const settings = config({ NODE_ENV: 'production', DB_PORT: '5434' });
     expect(settings.database.port).toBe(5434);
     expect(() => settings.validate()).toThrow('JWT_ACCESS_SECRET');
+  });
+
+  it('validates clinic windows as ordered, non-overlapping real HH:mm ranges', () => {
+    expect(
+      config({ QUEUE_ISSUANCE_WINDOWS: '07:00-11:30,13:00-16:30' }).queueIssuanceWindows,
+    ).toEqual([
+      { start: '07:00', end: '11:30' },
+      { start: '13:00', end: '16:30' },
+    ]);
+    for (const value of [
+      '07:00-11:30',
+      '24:00-25:00,13:00-16:30',
+      '07:60-11:30,13:00-16:30',
+      '07:00-14:00,13:00-16:30',
+      '11:30-07:00,13:00-16:30',
+    ]) {
+      expect(() => config({ QUEUE_ISSUANCE_WINDOWS: value }).queueIssuanceWindows).toThrow(
+        'QUEUE_ISSUANCE_WINDOWS',
+      );
+    }
   });
 
   it('wires the real AuthModule/JWT/controller to the config provider without a database', async () => {

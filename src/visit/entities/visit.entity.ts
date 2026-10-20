@@ -81,6 +81,12 @@ export class Visit extends BaseEntity {
   @Column({ type: 'boolean', default: false })
   isVerified: boolean;
 
+  @Column({ name: 'hall_reissue_count', type: 'int', default: 0 })
+  hallReissueCount: number;
+
+  @Column({ name: 'intake_completed_at', type: 'timestamptz', nullable: true })
+  intakeCompletedAt?: Date;
+
   @OneToOne('VisitVital', (vital: any) => vital.visit)
   vital?: VisitVital;
 

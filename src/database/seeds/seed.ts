@@ -8,6 +8,10 @@ import {
 import dataSource from '../data-source';
 import { User } from '../entities/user.entity';
 import { Department } from '../../department/entities/department.entity';
+import { DoctorSchedule } from '../../department/entities/doctor-schedule.entity';
+import { ShiftType } from '../../department/enums/shift-type.enum';
+import { Role } from '../../user/enums/role.enum';
+import { getBusinessTime } from '../../visit/business-time';
 import { TriageRule } from '../../triage/entities/triage-rule.entity';
 import { SystemConfig } from '../../admin/entities/system-config.entity';
 
@@ -19,6 +23,7 @@ async function runSeed() {
   const deptRepo = dataSource.getRepository(Department);
   const ruleRepo = dataSource.getRepository(TriageRule);
   const configRepo = dataSource.getRepository(SystemConfig);
+  const scheduleRepo = dataSource.getRepository(DoctorSchedule);
 
   // 1. Seed Users
   console.log('--- 1. SEEDING USERS & MEDICAL STAFF ---');
@@ -110,8 +115,31 @@ async function runSeed() {
     }
   }
 
-  // 4. Seed System Config
-  console.log('--- 4. SEEDING SYSTEM CONFIGS ---');
+  // 4. Keep the demo usable across weekends and midnight without manual reseeding.
+  console.log('--- 4. SEEDING 14 DAYS OF DOCTOR SCHEDULES ---');
+  const doctors = await userRepo.find({ where: { role: Role.DOCTOR } });
+  const rooms = [...deptMap.values()].filter((dept) => dept.roomType === 'CONSULTATION');
+  const { businessDate } = getBusinessTime();
+  for (let dayOffset = 0; dayOffset < 14; dayOffset += 1) {
+    const shiftDate = new Date(`${businessDate}T00:00:00.000Z`);
+    shiftDate.setUTCDate(shiftDate.getUTCDate() + dayOffset);
+    for (const [index, doctor] of doctors.entries()) {
+      const room = rooms[index % rooms.length];
+      if (!room) break;
+      for (const shiftType of [ShiftType.MORNING, ShiftType.AFTERNOON]) {
+        let schedule = await scheduleRepo.findOne({
+          where: { doctorId: doctor.id, shiftDate, shiftType },
+        });
+        schedule ??= scheduleRepo.create({ doctorId: doctor.id, shiftDate, shiftType });
+        schedule.departmentId = room.id;
+        schedule.maxQuota = room.maxQuotaPerSlot;
+        await scheduleRepo.save(schedule);
+      }
+    }
+  }
+
+  // 5. Seed System Config
+  console.log('--- 5. SEEDING SYSTEM CONFIGS ---');
   let config = await configRepo.findOne({ where: { configKey: QUEUE_PRIORITY_CONFIG_KEY } });
   if (!config) {
     config = configRepo.create({

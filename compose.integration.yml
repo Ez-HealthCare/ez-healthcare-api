@@ -1,0 +1,45 @@
+name: ez-healthcare-phase-c-integration
+services:
+  db-integration:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: phase_c
+      POSTGRES_PASSWORD: phase_c_only
+      POSTGRES_DB: phase_c
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U phase_c -d phase_c']
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  integration-tests:
+    build:
+      context: .
+      dockerfile: ../dashboard/docker/api.Dockerfile
+    command:
+      [
+        'sh',
+        '-c',
+        'node --loader ./esm-loader.mjs dist/database/setup.js && node --loader ./esm-loader.mjs dist/database/seeds/seed.js && node --experimental-vm-modules node_modules/jest/bin/jest.js --config ./test/jest-e2e.json --runInBand',
+      ]
+    volumes:
+      - ./dist:/app/dist:ro
+      - ./src:/app/src:ro
+      - ./test:/app/test:ro
+    environment:
+      NODE_ENV: test
+      DB_HOST: db-integration
+      DB_PORT: 5432
+      DB_USERNAME: phase_c
+      DB_PASSWORD: phase_c_only
+      DB_DATABASE: phase_c
+      DB_SYNC: 'false'
+      DB_LOGGING: 'false'
+      JWT_ACCESS_SECRET: phase-c-integration-secret-at-least-32-characters
+      SIGNATURE_SECRET: phase-c-integration-signature
+      CORS_ORIGINS: http://localhost:3001
+      QUEUE_ISSUANCE_WINDOWS: 00:00-12:00,12:00-23:59
+    depends_on:
+      db-integration:
+        condition: service_healthy

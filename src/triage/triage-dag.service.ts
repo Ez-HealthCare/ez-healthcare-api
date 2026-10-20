@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
   UnprocessableEntityException,
@@ -110,6 +111,9 @@ export class TriageDagService {
 
     if (!visit) {
       throw new NotFoundException(`Visit with ID ${visitId} not found`);
+    }
+    if (visit.currentDoctorId !== doctorId || visit.status !== VisitStatus.IN_EXAMINATION) {
+      throw new ForbiddenException('Only the doctor examining this visit may create orders.');
     }
 
     if (!visit.vital) {

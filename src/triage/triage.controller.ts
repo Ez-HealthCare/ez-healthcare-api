@@ -1,13 +1,20 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Post } from '@nestjs/common';
-import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { Body, Controller, Get, HttpCode, HttpStatus, Post, UseGuards } from '@nestjs/common';
+import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { TriageRule } from './entities/triage-rule.entity';
 import { Department } from '../department/entities/department.entity';
 import { DEPARTMENT_CODES, ELDERLY_PRIORITY_AGE } from '../common/constants/clinical.constants';
 import { RecommendTriageDto } from './dto/recommend-triage.dto';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { RolesGuard } from '../auth/guards/roles.guard';
+import { Roles } from '../auth/decorators/roles.decorator';
+import { Role } from '../user/enums/role.enum';
 
 @ApiTags('Clinical Triage & Routing Engine')
+@ApiBearerAuth()
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(Role.NURSE, Role.RECEPTIONIST)
 @Controller('triage')
 export class TriageController {
   constructor(

@@ -1,9 +1,12 @@
 {
   "moduleFileExtensions": ["js", "json", "ts"],
   "rootDir": ".",
+  "preset": "ts-jest/presets/default-esm",
   "testEnvironment": "node",
+  "testTimeout": 60000,
   "testRegex": ".e2e-spec.ts$",
   "transform": {
-    "^.+\\.(t|j)s$": "ts-jest"
-  }
+    "^.+\\.(t|j)s$": ["ts-jest", { "useESM": true }]
+  },
+  "moduleNameMapper": { "^(\\.{1,2}/.*)\\.js$": "$1" }
 }

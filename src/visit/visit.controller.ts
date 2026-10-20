@@ -2,11 +2,13 @@ import {
   Body,
   Controller,
   Get,
+  Headers,
   HttpCode,
   HttpStatus,
   Param,
   Post,
   Put,
+  Query,
   Request,
   UseGuards,
 } from '@nestjs/common';
@@ -16,39 +18,78 @@ import { TriageDagService } from '../triage/triage-dag.service';
 import { CreateHallTicketDto } from './dto/create-hall-ticket.dto';
 import { VerifyVisitDto, RejectVerificationDto } from './dto/verify-visit.dto';
 import { AssignClinicDto } from './dto/assign-clinic.dto';
-import { RecordVitalsDto } from './dto/record-vitals.dto';
+import { RecordIntakeDto } from './dto/record-intake.dto';
+import { ReissueTicketDto, RequeueVisitDto } from './dto/queue-action.dto';
 import { EmergencyDispatchDto, TransferClinicDto } from './dto/transfer-clinic.dto';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { ConcludeVisitDto } from './dto/conclude-visit.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { OptionalJwtGuard } from '../auth/guards/optional-jwt.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { Role } from '../user/enums/role.enum';
+import { QueueTicketService } from './queue-ticket.service';
+import { ReceptionService } from './reception.service';
+import { ClinicQueueService } from './clinic-queue.service';
 
 @ApiTags('Outpatient Clinical Visits')
 @Controller('visits')
 export class VisitController {
   constructor(
     private readonly visitService: VisitService,
+    private readonly queueTicketService: QueueTicketService,
+    private readonly receptionService: ReceptionService,
+    private readonly clinicQueueService: ClinicQueueService,
     private readonly triageDagService: TriageDagService,
   ) {}
 
-  /**
-   * Self-service kiosk OR reception desk check-in.
-   * No mandatory auth — anonymous patients at the kiosk may check in,
-   * but a logged-in patient token is also accepted (OptionalJwtGuard).
-   */
   @Post('hall-ticket')
-  @UseGuards(OptionalJwtGuard)
-  @ApiOperation({ summary: 'Issue Hall Ticket (A-xxx) for self-service or reception check-in' })
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.PATIENT)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Patient requests a facility-wide Hall Ticket (A-xxx)' })
   @ApiResponse({
     status: 201,
     description: 'Hall Ticket issued successfully with HALL_WAITING status',
   })
   @ApiResponse({ status: 409, description: 'Patient already has an active visit ticket for today' })
-  async createHallTicket(@Body() dto: CreateHallTicketDto, @Request() req: any) {
-    return this.visitService.createHallTicket(dto, req?.user);
+  async createHallTicket(
+    @Body() dto: CreateHallTicketDto,
+    @Request() req: any,
+    @Headers('idempotency-key') idempotencyKey?: string,
+  ) {
+    return this.queueTicketService.createHallTicket(dto, req.user, idempotencyKey);
+  }
+
+  @Get('me/current')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.PATIENT)
+  @ApiBearerAuth()
+  getMyCurrentVisit(@Request() req: any) {
+    return this.receptionService.getMyCurrentVisit(req.user.id);
+  }
+
+  @Get('reception/queue')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.NURSE, Role.RECEPTIONIST)
+  @ApiBearerAuth()
+  getReceptionQueue() {
+    return this.receptionService.getReceptionQueue();
+  }
+
+  @Get('reception/expired')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.NURSE, Role.RECEPTIONIST)
+  @ApiBearerAuth()
+  getExpiredReceptionQueue(@Query('businessDate') businessDate?: string) {
+    return this.receptionService.getExpiredReceptionQueue(businessDate);
+  }
+
+  @Get('doctor/rooms')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.DOCTOR)
+  @ApiBearerAuth()
+  getDoctorRooms(@Request() req: any) {
+    return this.clinicQueueService.getDoctorRooms(req.user.id);
   }
 
   /**
@@ -57,7 +98,7 @@ export class VisitController {
    */
   @Put(':id/verify')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.RECEPTIONIST, Role.ADMIN)
+  @Roles(Role.RECEPTIONIST, Role.NURSE)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Reception: audit physical National ID & Insurance card' })
   @ApiResponse({
@@ -67,12 +108,12 @@ export class VisitController {
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({ status: 403, description: 'Forbidden: requires RECEPTIONIST or ADMIN role' })
   async verifyVisit(@Param('id') id: string, @Body() dto: VerifyVisitDto, @Request() req: any) {
-    return this.visitService.verifyVisit(id, dto, req.user?.id);
+    return this.receptionService.verifyVisit(id, dto, req.user);
   }
 
   @Put(':id/reject-verification')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.RECEPTIONIST, Role.ADMIN)
+  @Roles(Role.RECEPTIONIST, Role.NURSE)
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Reception: reject verification due to fraudulent or mismatching credentials',
@@ -85,13 +126,13 @@ export class VisitController {
     @Body() dto: RejectVerificationDto,
     @Request() req: any,
   ) {
-    return this.visitService.rejectVerification(id, dto, req.user?.id);
+    return this.receptionService.rejectVerification(id, dto, req.user);
   }
 
   @Post(':id/assign-clinic')
   @HttpCode(HttpStatus.OK)
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.RECEPTIONIST, Role.ADMIN)
+  @Roles(Role.RECEPTIONIST, Role.NURSE)
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Reception: assign specialty clinic ticket (HH-xx) with quota and priority check',
@@ -103,31 +144,40 @@ export class VisitController {
   @ApiResponse({ status: 409, description: 'Clinic has reached its maximum shift quota' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({ status: 403, description: 'Forbidden: requires RECEPTIONIST or ADMIN role' })
-  async assignClinic(@Param('id') id: string, @Body() dto: AssignClinicDto, @Request() req: any) {
-    return this.visitService.assignClinic(id, dto, req.user?.id);
+  async assignClinic(
+    @Param('id') id: string,
+    @Body() dto: AssignClinicDto,
+    @Request() req: any,
+    @Headers('idempotency-key') idempotencyKey?: string,
+  ) {
+    return this.receptionService.assignClinic(id, dto, req.user, idempotencyKey);
   }
 
-  @Post(':id/vitals')
+  @Put(':id/intake')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.NURSE, Role.ADMIN)
+  @Roles(Role.NURSE, Role.RECEPTIONIST)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Nurse: record 5 mandatory vital signs (BP, HR, Temp, SpO2, RespRate)' })
-  @ApiResponse({
-    status: 201,
-    description:
-      'Vitals recorded; routes to CLINIC_WAITING or STAT EMERGENCY_DISPATCHED if SpO2 < 90%',
-  })
-  @ApiResponse({ status: 400, description: 'Mandatory vital sign omitted' })
-  @ApiResponse({ status: 401, description: 'Unauthorized' })
-  @ApiResponse({ status: 403, description: 'Forbidden: requires NURSE or ADMIN role' })
-  async recordVitals(@Param('id') id: string, @Body() dto: RecordVitalsDto, @Request() req: any) {
-    return this.visitService.recordVitalSigns(id, dto, req.user?.id);
+  recordIntake(@Param('id') id: string, @Body() dto: RecordIntakeDto, @Request() req: any) {
+    return this.receptionService.recordIntake(id, dto, req.user);
+  }
+
+  @Post(':id/reissue')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.PATIENT, Role.NURSE, Role.RECEPTIONIST)
+  @ApiBearerAuth()
+  reissueTicket(
+    @Param('id') id: string,
+    @Body() dto: ReissueTicketDto,
+    @Request() req: any,
+    @Headers('idempotency-key') idempotencyKey?: string,
+  ) {
+    return this.queueTicketService.reissueTicket(id, dto, req.user, idempotencyKey);
   }
 
   @Post(':id/emergency-dispatch')
   @HttpCode(HttpStatus.OK)
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.NURSE, Role.DOCTOR, Role.RECEPTIONIST, Role.EMERGENCY_STAFF, Role.ADMIN)
+  @Roles(Role.NURSE, Role.DOCTOR, Role.RECEPTIONIST)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Trigger STAT emergency dispatch to P.001 resuscitation unit' })
   @ApiResponse({ status: 200, description: 'Emergency dispatch protocol activated' })
@@ -138,25 +188,41 @@ export class VisitController {
     @Body() dto: EmergencyDispatchDto,
     @Request() req: any,
   ) {
-    return this.visitService.emergencyDispatch(id, dto, req.user?.id);
+    return this.visitService.emergencyDispatch(id, dto, req.user);
   }
 
   @Put(':id/call')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.DOCTOR, Role.ADMIN)
+  @Roles(Role.DOCTOR)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Doctor calls next waiting patient into consultation room' })
   @ApiResponse({ status: 200, description: 'Visit status transitions to IN_EXAMINATION' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({ status: 403, description: 'Forbidden: requires DOCTOR or ADMIN role' })
   async callPatient(@Param('id') id: string, @Request() req: any) {
-    return this.visitService.callPatient(id, req.user?.id);
+    return this.clinicQueueService.callPatient(id, req.user.id);
+  }
+
+  @Post(':id/start-exam')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.DOCTOR)
+  @ApiBearerAuth()
+  startExamination(@Param('id') id: string, @Request() req: any) {
+    return this.clinicQueueService.startExamination(id, req.user.id);
+  }
+
+  @Post(':id/requeue')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.NURSE, Role.RECEPTIONIST)
+  @ApiBearerAuth()
+  requeueVisit(@Param('id') id: string, @Body() dto: RequeueVisitDto, @Request() req: any) {
+    return this.clinicQueueService.requeueVisit(id, dto, req.user);
   }
 
   @Post(':id/transfer')
   @HttpCode(HttpStatus.OK)
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.DOCTOR, Role.ADMIN)
+  @Roles(Role.DOCTOR)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Transfer patient to alternate specialty consultation clinic' })
   @ApiResponse({ status: 200, description: 'Patient transferred with preserved clinical notes' })
@@ -166,13 +232,14 @@ export class VisitController {
     @Param('id') id: string,
     @Body() dto: TransferClinicDto,
     @Request() req: any,
+    @Headers('idempotency-key') idempotencyKey?: string,
   ) {
-    return this.visitService.transferClinic(id, dto, req.user?.id);
+    return this.clinicQueueService.transferClinic(id, dto, req.user, idempotencyKey);
   }
 
   @Post(':id/orders')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.DOCTOR, Role.ADMIN)
+  @Roles(Role.DOCTOR)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Formulate diagnostic orders evaluated by Kahn DAG algorithm' })
   @ApiResponse({
@@ -193,7 +260,7 @@ export class VisitController {
   @Post(':id/conclusion')
   @HttpCode(HttpStatus.OK)
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.DOCTOR, Role.ADMIN)
+  @Roles(Role.DOCTOR)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Final ICD-10 diagnosis, electronic prescription, and discharge' })
   @ApiResponse({
@@ -217,15 +284,15 @@ export class VisitController {
    */
   @Get(':id/route')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.ADMIN, Role.RECEPTIONIST, Role.DOCTOR, Role.NURSE, Role.LAB_TECHNICIAN, Role.PATIENT)
+  @Roles(Role.RECEPTIONIST, Role.DOCTOR, Role.NURSE, Role.PATIENT)
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Retrieve optimized multi-floor routing path with wait time heuristics',
   })
   @ApiResponse({ status: 200, description: 'Topological station route returned successfully' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
-  async getRoute(@Param('id') id: string) {
-    return this.visitService.getRoute(id);
+  async getRoute(@Param('id') id: string, @Request() req: any) {
+    return this.visitService.getRoute(id, req.user.id, req.user.role);
   }
 
   /**
@@ -234,7 +301,7 @@ export class VisitController {
    */
   @Get('queue/:departmentCode')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.ADMIN, Role.RECEPTIONIST, Role.DOCTOR, Role.NURSE, Role.LAB_TECHNICIAN)
+  @Roles(Role.RECEPTIONIST, Role.DOCTOR, Role.NURSE)
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Real-time patient queue for a specific clinic or diagnostic station (staff only)',
@@ -245,8 +312,8 @@ export class VisitController {
   })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({ status: 403, description: 'Forbidden: clinical staff only' })
-  async getQueue(@Param('departmentCode') departmentCode: string) {
-    return this.visitService.getQueue(departmentCode);
+  async getQueue(@Param('departmentCode') departmentCode: string, @Request() req: any) {
+    return this.clinicQueueService.getQueue(departmentCode, req.user);
   }
 
   /**
@@ -257,7 +324,7 @@ export class VisitController {
    */
   @Get(':id')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.ADMIN, Role.RECEPTIONIST, Role.DOCTOR, Role.NURSE, Role.LAB_TECHNICIAN, Role.PATIENT)
+  @Roles(Role.RECEPTIONIST, Role.DOCTOR, Role.NURSE, Role.PATIENT)
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Retrieve full visit dossier including vitals, orders, steps, and prescription',
@@ -272,7 +339,7 @@ export class VisitController {
   async getVisitDetails(@Param('id') id: string, @Request() req: any) {
     const callerRole: Role = req.user?.role;
     const callerId: string = req.user?.id;
-    const includePatientPii = [Role.ADMIN, Role.RECEPTIONIST].includes(callerRole);
+    const includePatientPii = [Role.RECEPTIONIST, Role.NURSE].includes(callerRole);
     return this.visitService.getVisitDetails(id, callerId, callerRole, includePatientPii);
   }
 }

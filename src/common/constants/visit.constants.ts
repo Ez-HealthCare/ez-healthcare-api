@@ -19,7 +19,13 @@ export const VALID_TRANSITIONS: Record<VisitStatus, VisitStatus[]> = {
   [VisitStatus.HALL_WAITING]: [VisitStatus.RECEPTION_VERIFIED, VisitStatus.CANCELLED],
   [VisitStatus.RECEPTION_VERIFIED]: [VisitStatus.TRIAGE_PENDING, VisitStatus.CANCELLED],
   [VisitStatus.TRIAGE_PENDING]: [VisitStatus.CLINIC_WAITING, VisitStatus.EMERGENCY_DISPATCHED],
-  [VisitStatus.CLINIC_WAITING]: [VisitStatus.IN_EXAMINATION, VisitStatus.EMERGENCY_DISPATCHED],
+  [VisitStatus.CLINIC_WAITING]: [VisitStatus.CLINIC_CALLED, VisitStatus.EMERGENCY_DISPATCHED],
+  [VisitStatus.CLINIC_CALLED]: [
+    VisitStatus.CLINIC_CALLED,
+    VisitStatus.TEMPORARILY_ABSENT,
+    VisitStatus.IN_EXAMINATION,
+  ],
+  [VisitStatus.TEMPORARILY_ABSENT]: [VisitStatus.CLINIC_WAITING],
   [VisitStatus.IN_EXAMINATION]: [
     VisitStatus.PARACLINICAL_PENDING,
     VisitStatus.CLINIC_WAITING,

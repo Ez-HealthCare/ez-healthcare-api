@@ -21,6 +21,7 @@ function clinicalService(redFlag = false) {
     initialDepartment: null,
     initialDepartmentId: 'clinic-1',
     currentDepartmentId: '',
+    currentDoctorId: 'doctor-1',
   };
   const departments = Object.values(DEPARTMENT_CODES).map((code) => ({ id: code, code }));
   const savedSteps: any[] = [];

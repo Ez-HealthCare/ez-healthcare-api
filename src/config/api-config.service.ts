@@ -13,6 +13,7 @@ import {
   JWT_SECRET_MIN_LENGTH,
   OTP_DEFAULT_FROM,
 } from '../common/constants/auth.constants';
+import { BUSINESS_WINDOWS } from '../common/constants/clinical.constants';
 
 @Injectable()
 export class ApiConfigService {
@@ -85,6 +86,29 @@ export class ApiConfigService {
     return { url: url || undefined, from, authorization: authorization || undefined };
   }
 
+  get queueIssuanceWindows() {
+    const raw = this.value(
+      'QUEUE_ISSUANCE_WINDOWS',
+      BUSINESS_WINDOWS.map((window) => `${window.start}-${window.end}`).join(','),
+    );
+    const windows = raw.split(',').map((entry) => {
+      const match = /^([01]\d|2[0-3]):([0-5]\d)-([01]\d|2[0-3]):([0-5]\d)$/.exec(entry.trim());
+      const start = match ? `${match[1]}:${match[2]}` : '';
+      const end = match ? `${match[3]}:${match[4]}` : '';
+      if (!match || start >= end) {
+        throw new Error('QUEUE_ISSUANCE_WINDOWS must use HH:mm-HH:mm comma-separated ranges');
+      }
+      return { start, end };
+    });
+    if (windows.length !== 2) {
+      throw new Error('QUEUE_ISSUANCE_WINDOWS must define exactly morning and afternoon ranges');
+    }
+    if (windows[0].end > windows[1].start) {
+      throw new Error('QUEUE_ISSUANCE_WINDOWS ranges must not overlap');
+    }
+    return windows;
+  }
+
   // Called by ApiConfigModule before consumers (JWT/database) are constructed.
   validate(): void {
     void this.port;
@@ -92,6 +116,7 @@ export class ApiConfigService {
     void this.jwtSecret;
     void this.corsOrigins;
     void this.otpDelivery;
+    void this.queueIssuanceWindows;
   }
 
   private value(key: string, fallback = ''): string {

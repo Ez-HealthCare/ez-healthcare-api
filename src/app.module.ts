@@ -11,12 +11,14 @@ import { VisitModule } from './visit/visit.module';
 import { ParaclinicalModule } from './paraclinical/paraclinical.module';
 import { AdminModule } from './admin/admin.module';
 import { AuditModule } from './common/audit.module';
+import { NotificationModule } from './notification/notification.module';
 
 @Module({
   imports: [
     ApiConfigModule,
     DatabaseModule,
     AuditModule,
+    NotificationModule,
     AuthModule,
     UserModule,
     DepartmentModule,

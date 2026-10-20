@@ -1,0 +1,20 @@
+export enum QueueTicketKind {
+  HALL = 'HALL',
+  CLINIC = 'CLINIC',
+}
+
+export enum QueueTicketStatus {
+  ACTIVE = 'ACTIVE',
+  PAUSED = 'PAUSED',
+  COMPLETED = 'COMPLETED',
+  SUPERSEDED = 'SUPERSEDED',
+  EXPIRED = 'EXPIRED',
+}
+
+export enum QueueTicketOperation {
+  HALL_ISSUE = 'HALL_ISSUE',
+  CLINIC_ASSIGN = 'CLINIC_ASSIGN',
+  HALL_REISSUE = 'HALL_REISSUE',
+  CLINIC_REISSUE = 'CLINIC_REISSUE',
+  CLINIC_TRANSFER = 'CLINIC_TRANSFER',
+}

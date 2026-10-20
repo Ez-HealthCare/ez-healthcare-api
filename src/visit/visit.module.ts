@@ -11,6 +11,13 @@ import { PrescriptionItem } from '../prescription/entities/prescription-item.ent
 import { VisitService } from './visit.service';
 import { VisitController } from './visit.controller';
 import { TriageModule } from '../triage/triage.module';
+import { DoctorSchedule } from '../department/entities/doctor-schedule.entity';
+import { QueueCounter } from './entities/queue-counter.entity';
+import { QueueTicket } from './entities/queue-ticket.entity';
+import { NotificationModule } from '../notification/notification.module';
+import { QueueTicketService } from './queue-ticket.service';
+import { ReceptionService } from './reception.service';
+import { ClinicQueueService } from './clinic-queue.service';
 
 @Module({
   imports: [
@@ -23,11 +30,15 @@ import { TriageModule } from '../triage/triage.module';
       User,
       Prescription,
       PrescriptionItem,
+      DoctorSchedule,
+      QueueCounter,
+      QueueTicket,
     ]),
     TriageModule,
+    NotificationModule,
   ],
   controllers: [VisitController],
-  providers: [VisitService],
-  exports: [VisitService],
+  providers: [VisitService, QueueTicketService, ReceptionService, ClinicQueueService],
+  exports: [VisitService, QueueTicketService, ReceptionService, ClinicQueueService],
 })
 export class VisitModule {}
