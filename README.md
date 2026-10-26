@@ -20,20 +20,28 @@
 
 ### Phase B outpatient flow
 
-The live flow is `patient hall ticket → nurse/reception verification and intake →
-room assignment and clinic ticket → scheduled doctor call/start examination`.
+The current live flow is `patient profile + symptom request → receptionist issues a
+HALL ticket → receptionist calls the next number → receptionist verifies CCCD/BHYT
+→ nurse intake and routing → clinic ticket → doctor call/start examination`.
 Queue counters are atomic PostgreSQL upserts keyed by ticket kind, room and
 business date; tickets retain reissue history and issuing mutations require an
 `Idempotency-Key`. The business timezone is `Asia/Ho_Chi_Minh`; configure the two
 daily issuance windows with `QUEUE_ISSUANCE_WINDOWS`.
 
-PATIENT is owner-scoped, NURSE (and legacy RECEPTIONIST) operates reception,
-DOCTOR is restricted by `DoctorSchedule`, and ADMIN has no implicit clinical
+PATIENT is owner-scoped. RECEPTIONIST owns HALL queue issuance, calling and
+administrative verification; NURSE owns intake and clinic routing. DOCTOR is
+restricted by `DoctorSchedule`, and ADMIN has no implicit clinical
 permission. Notifications are persisted and exposed through list/read endpoints.
 Phase C adds transactional clinical mutations, one-current-ticket database
 constraints, concurrent idempotency replay and API-boundary expiration. Staff can
 list expired hall tickets at `GET /visits/reception/expired` and reissue them while
 preserving the original Visit and ticket history.
+
+The receptionist's live queue contains only HALL tickets in `ACTIVE` or `CALLED`
+state. Verification is permitted only while the ticket is `CALLED`; a successful
+verification completes the HALL ticket and moves the visit to `TRIAGE_PENDING`, so
+it no longer appears in the reception queue. The current receptionist API does not
+surface appointment check-in, pause, or recall actions.
 
 ### Key Highlights
 

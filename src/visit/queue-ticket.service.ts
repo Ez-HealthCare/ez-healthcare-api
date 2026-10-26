@@ -91,7 +91,7 @@ export class QueueTicketService {
       .update(QueueTicket)
       .set({ status: QueueTicketStatus.EXPIRED })
       .where('status IN (:...statuses)', {
-        statuses: [QueueTicketStatus.ACTIVE, QueueTicketStatus.PAUSED],
+        statuses: [QueueTicketStatus.ACTIVE, QueueTicketStatus.CALLED, QueueTicketStatus.PAUSED],
       })
       .andWhere('expires_at <= :now', { now })
       .execute();
@@ -120,7 +120,7 @@ export class QueueTicketService {
       where: {
         visitId,
         kind,
-        status: In([QueueTicketStatus.ACTIVE, QueueTicketStatus.PAUSED]),
+        status: In([QueueTicketStatus.ACTIVE, QueueTicketStatus.CALLED, QueueTicketStatus.PAUSED]),
       },
       order: { createdAt: 'DESC' },
     });
@@ -332,7 +332,7 @@ export class QueueTicketService {
       .where('visit.patient_id = :patientId', { patientId: input.patientId })
       .andWhere('ticket.business_date = :businessDate', { businessDate: input.businessDate })
       .andWhere('ticket.status IN (:...statuses)', {
-        statuses: [QueueTicketStatus.ACTIVE, QueueTicketStatus.PAUSED],
+        statuses: [QueueTicketStatus.ACTIVE, QueueTicketStatus.CALLED, QueueTicketStatus.PAUSED],
       })
       .getOne();
     if (existing) {

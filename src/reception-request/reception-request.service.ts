@@ -11,6 +11,9 @@ import { User } from '../database/entities/user.entity';
 import { QueueTicket } from '../visit/entities/queue-ticket.entity';
 import { Visit } from '../visit/entities/visit.entity';
 import { QueueTicketStatus } from '../visit/enums/queue-ticket.enum';
+import { QueueTicketOperation } from '../visit/enums/queue-ticket.enum';
+import { QueueTicketService } from '../visit/queue-ticket.service';
+import { ApiConfigService } from '../config/api-config.service';
 import { VisitStatus } from '../visit/enums/visit-status.enum';
 import { SaveReceptionRequestDraftDto } from './dto/save-reception-request-draft.dto';
 import { ReceptionRequest } from './entities/reception-request.entity';
@@ -32,6 +35,8 @@ export class ReceptionRequestService {
     private readonly visits: Repository<Visit>,
     @InjectRepository(QueueTicket)
     private readonly tickets: Repository<QueueTicket>,
+    private readonly queue: QueueTicketService,
+    private readonly config: ApiConfigService,
     private readonly audit: AuditService,
   ) {}
 
@@ -39,6 +44,82 @@ export class ReceptionRequestService {
     return this.requests.findOne({
       where: { patientId, status: In(ACTIVE_REQUEST_STATUSES) },
       order: { updatedAt: 'DESC' },
+    });
+  }
+
+  async listPending(search?: string) {
+    const query = this.requests
+      .createQueryBuilder('request')
+      .innerJoinAndSelect('request.patient', 'patient')
+      .where('request.status = :status', { status: ReceptionRequestStatus.RECEPTION_PENDING })
+      .orderBy('request.submitted_at', 'ASC');
+    if (search?.trim()) {
+      query.andWhere(
+        '(patient.name ILIKE :search OR patient.national_id ILIKE :search OR patient.phone ILIKE :search)',
+        { search: `%${search.trim()}%` },
+      );
+    }
+    return query.getMany();
+  }
+
+  async confirm(requestId: string, actor: { id: string; role: string }) {
+    const business = this.queue.requireIssuanceWindow();
+    return this.queue.transaction(async (manager) => {
+      const request = await manager
+        .getRepository(ReceptionRequest)
+        .createQueryBuilder('request')
+        .setLock('pessimistic_write')
+        .where('request.id = :requestId', { requestId })
+        .getOne();
+      if (!request) throw new NotFoundException('Reception request not found.');
+      if (request.status !== ReceptionRequestStatus.RECEPTION_PENDING) {
+        throw new ConflictException('This reception request has already been processed.');
+      }
+      const issued = await this.queue.issueReceptionHallTicket(manager, {
+        patientId: request.patientId,
+        actor: actor as any,
+        idempotencyKey: `reception-request:${request.id}`,
+        operation: QueueTicketOperation.HALL_RECEPTION_REQUEST,
+        requestFingerprint: this.queue.fingerprint({ requestId: request.id, actorId: actor.id }),
+        businessDate: business.businessDate,
+        expiresAt: business.expiresAt,
+        chiefComplaint: request.chiefComplaint,
+      });
+      request.status = ReceptionRequestStatus.CONVERTED_TO_VISIT;
+      request.visitId = issued.visit.id;
+      request.processedAt = new Date();
+      request.processedById = actor.id;
+      await manager.getRepository(ReceptionRequest).save(request);
+      await this.audit.log(
+        { action: 'CONVERT_RECEPTION_REQUEST_TO_VISIT', actorId: actor.id, actorRole: actor.role, targetEntityType: 'ReceptionRequest', targetEntityId: request.id, metadata: { visitId: issued.visit.id, hallTicketNumber: issued.visit.hallTicketNumber } },
+        manager,
+      );
+      return this.queue.ticketResponse(issued.visit, issued.ticket);
+    });
+  }
+
+  async reject(requestId: string, reason: string, actor: { id: string; role: string }) {
+    return this.queue.transaction(async (manager) => {
+      const request = await manager
+        .getRepository(ReceptionRequest)
+        .createQueryBuilder('request')
+        .setLock('pessimistic_write')
+        .where('request.id = :requestId', { requestId })
+        .getOne();
+      if (!request) throw new NotFoundException('Reception request not found.');
+      if (request.status !== ReceptionRequestStatus.RECEPTION_PENDING) {
+        throw new ConflictException('Only a pending reception request can be rejected.');
+      }
+      request.status = ReceptionRequestStatus.REJECTED;
+      request.rejectionReason = reason.trim();
+      request.processedAt = new Date();
+      request.processedById = actor.id;
+      const saved = await manager.getRepository(ReceptionRequest).save(request);
+      await this.audit.log(
+        { action: 'REJECT_RECEPTION_REQUEST', actorId: actor.id, actorRole: actor.role, targetEntityType: 'ReceptionRequest', targetEntityId: saved.id, metadata: { reason: saved.rejectionReason } },
+        manager,
+      );
+      return saved;
     });
   }
 
@@ -150,7 +231,7 @@ export class ReceptionRequestService {
     const activeTicket = await this.tickets.findOne({
       where: {
         visitId: activeVisit.id,
-        status: In([QueueTicketStatus.ACTIVE, QueueTicketStatus.PAUSED]),
+        status: In([QueueTicketStatus.ACTIVE, QueueTicketStatus.CALLED, QueueTicketStatus.PAUSED]),
       },
     });
     if (activeTicket) {

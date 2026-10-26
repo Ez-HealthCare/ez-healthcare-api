@@ -13,6 +13,7 @@ export const dataSourceOptions: DataSourceOptions = {
   ...config.database,
   entities: [__dirname + '/../**/*.entity{.ts,.js}'],
   migrations: [__dirname + '/migrations/*{.ts,.js}'],
+  migrationsTransactionMode: 'each',
 };
 
 const dataSource = new DataSource(dataSourceOptions);

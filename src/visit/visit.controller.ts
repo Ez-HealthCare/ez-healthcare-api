@@ -83,10 +83,19 @@ export class VisitController {
 
   @Get('reception/queue')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.NURSE, Role.RECEPTIONIST)
+  @Roles(Role.RECEPTIONIST)
   @ApiBearerAuth()
   getReceptionQueue() {
     return this.receptionService.getReceptionQueue();
+  }
+
+  @Post('reception/call-next')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.RECEPTIONIST)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Call the next active Hall ticket at reception' })
+  callNextHallTicket(@Request() req: any) {
+    return this.receptionService.callNextHallTicket(req.user);
   }
 
   @Get('reception/expired')
@@ -142,12 +151,12 @@ export class VisitController {
    */
   @Put(':id/verify')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.RECEPTIONIST, Role.NURSE)
+  @Roles(Role.RECEPTIONIST)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Reception: audit physical National ID & Insurance card' })
   @ApiResponse({
     status: 200,
-    description: 'Patient identity verified, transitions to RECEPTION_VERIFIED',
+    description: 'Patient identity verified and handed off to nursing triage',
   })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({ status: 403, description: 'Forbidden: requires RECEPTIONIST or ADMIN role' })
@@ -157,7 +166,7 @@ export class VisitController {
 
   @Put(':id/reject-verification')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.RECEPTIONIST, Role.NURSE)
+  @Roles(Role.RECEPTIONIST)
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Reception: reject verification due to fraudulent or mismatching credentials',
@@ -176,14 +185,14 @@ export class VisitController {
   @Post(':id/assign-clinic')
   @HttpCode(HttpStatus.OK)
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.RECEPTIONIST, Role.NURSE)
+  @Roles(Role.NURSE)
   @ApiBearerAuth()
   @ApiOperation({
-    summary: 'Reception: assign specialty clinic ticket (HH-xx) with quota and priority check',
+    summary: 'Nurse: assign specialty clinic ticket (HH-xx) after intake and routing',
   })
   @ApiResponse({
     status: 200,
-    description: 'Clinic ticket assigned, transitions to TRIAGE_PENDING',
+    description: 'Clinic ticket assigned after triage and routing',
   })
   @ApiResponse({ status: 409, description: 'Clinic has reached its maximum shift quota' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
@@ -199,7 +208,7 @@ export class VisitController {
 
   @Put(':id/intake')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.NURSE, Role.RECEPTIONIST)
+  @Roles(Role.NURSE)
   @ApiBearerAuth()
   recordIntake(@Param('id') id: string, @Body() dto: RecordIntakeDto, @Request() req: any) {
     return this.receptionService.recordIntake(id, dto, req.user);

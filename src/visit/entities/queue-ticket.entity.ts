@@ -12,7 +12,7 @@ import { QueueTicketKind, QueueTicketStatus } from '../enums/queue-ticket.enum';
 @Index('idx_queue_ticket_visit_kind', ['visitId', 'kind'])
 @Index('uq_queue_ticket_current_visit_kind', ['visitId', 'kind'], {
   unique: true,
-  where: `"status" IN ('ACTIVE', 'PAUSED')`,
+  where: `"status" IN ('ACTIVE', 'CALLED', 'PAUSED')`,
 })
 @Index('idx_queue_ticket_active_queue', ['businessDate', 'kind', 'scopeKey', 'status', 'queuedAt'])
 export class QueueTicket extends BaseEntity {

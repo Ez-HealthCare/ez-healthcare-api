@@ -91,6 +91,7 @@ export class ReceptionService {
       .andWhere('ticket.status IN (:...statuses)', {
         statuses: [
           QueueTicketStatus.ACTIVE,
+          QueueTicketStatus.CALLED,
           QueueTicketStatus.PAUSED,
           QueueTicketStatus.EXPIRED,
           QueueTicketStatus.COMPLETED,
@@ -126,30 +127,17 @@ export class ReceptionService {
     const { businessDate } = getBusinessTime(new Date(), this.config.queueIssuanceWindows);
     const tickets = await this.tickets.find({
       where: {
+        kind: QueueTicketKind.HALL,
         businessDate,
-        status: In([QueueTicketStatus.ACTIVE, QueueTicketStatus.PAUSED]),
+        status: In([QueueTicketStatus.ACTIVE, QueueTicketStatus.CALLED]),
       },
       relations: {
         visit: { patient: true, vital: true, currentDepartment: true },
       },
       order: { queuedAt: 'ASC' },
     });
-    const latest = new Map<string, QueueTicket>();
-    for (const ticket of tickets) {
-      const current = latest.get(ticket.visitId);
-      if (!current || ticket.kind === QueueTicketKind.CLINIC) latest.set(ticket.visitId, ticket);
-    }
-    return [...latest.values()]
-      .filter((ticket) =>
-        [
-          VisitStatus.HALL_WAITING,
-          VisitStatus.RECEPTION_VERIFIED,
-          VisitStatus.TRIAGE_PENDING,
-          VisitStatus.CLINIC_WAITING,
-          VisitStatus.CLINIC_CALLED,
-          VisitStatus.TEMPORARILY_ABSENT,
-        ].includes(ticket.visit.status),
-      )
+    return tickets
+      .filter((ticket) => ticket.visit.status === VisitStatus.HALL_WAITING)
       .sort(
         (a, b) =>
           Number(b.visit.isPriority) - Number(a.visit.isPriority) ||
@@ -189,6 +177,7 @@ export class ReceptionService {
       }
       ticket.callAttempts += 1;
       ticket.lastCalledAt = new Date();
+      ticket.status = QueueTicketStatus.CALLED;
       await manager.getRepository(QueueTicket).save(ticket);
       await this.notifications.create(
         {
@@ -219,6 +208,23 @@ export class ReceptionService {
         lastCalledAt: ticket.lastCalledAt,
       };
     });
+  }
+
+  async callNextHallTicket(actor: Actor) {
+    await this.queue.expireDueTickets();
+    const { businessDate } = getBusinessTime(new Date(), this.config.queueIssuanceWindows);
+    const next = await this.tickets
+      .createQueryBuilder('ticket')
+      .innerJoinAndSelect('ticket.visit', 'visit')
+      .where('ticket.kind = :kind', { kind: QueueTicketKind.HALL })
+      .andWhere('ticket.business_date = :businessDate', { businessDate })
+      .andWhere('ticket.status = :ticketStatus', { ticketStatus: QueueTicketStatus.ACTIVE })
+      .andWhere('visit.status = :visitStatus', { visitStatus: VisitStatus.HALL_WAITING })
+      .orderBy('visit."isPriority"', 'DESC')
+      .addOrderBy('ticket.queued_at', 'ASC')
+      .getOne();
+    if (!next) throw new NotFoundException('No patient is waiting at reception.');
+    return this.callHallTicket(next.visitId, actor);
   }
 
   async pauseHallTicket(id: string, dto: PauseHallTicketDto, actor: Actor) {
@@ -301,6 +307,13 @@ export class ReceptionService {
   async verifyVisit(id: string, dto: VerifyVisitDto, actor: Actor) {
     return this.queue.transaction(async (manager) => {
       const visit = await this.queue.lockVisit(manager, id);
+      const hallTicket = await this.queue.activeTicket(id, QueueTicketKind.HALL, manager);
+      if (!hallTicket || hallTicket.status !== QueueTicketStatus.CALLED) {
+        throw clinicalConflict(
+          'VISIT_STATE_CONFLICT',
+          'Only the patient currently called to the reception desk can be verified.',
+        );
+      }
       const patient = await manager.getRepository(User).findOne({ where: { id: visit.patientId } });
       if (!patient) throw new NotFoundException('Patient not found.');
       const targetStatus = dto.nationalIdVerified
@@ -312,6 +325,21 @@ export class ReceptionService {
       visit.isVerified = dto.nationalIdVerified;
       if (dto.insuranceCardNumber) patient.insuranceCardNumber = dto.insuranceCardNumber;
       await manager.getRepository(User).save(patient);
+      if (dto.nationalIdVerified) {
+        assertTransition(visit.status, VisitStatus.TRIAGE_PENDING);
+        visit.status = VisitStatus.TRIAGE_PENDING;
+        await manager
+          .getRepository(QueueTicket)
+          .createQueryBuilder()
+          .update(QueueTicket)
+          .set({ status: QueueTicketStatus.COMPLETED })
+          .where('visit_id = :id', { id })
+          .andWhere('kind = :kind', { kind: QueueTicketKind.HALL })
+          .andWhere('status IN (:...statuses)', {
+            statuses: [QueueTicketStatus.ACTIVE, QueueTicketStatus.CALLED],
+          })
+          .execute();
+      }
       await manager.getRepository(Visit).save(visit);
       if (!dto.nationalIdVerified) {
         await manager
@@ -321,7 +349,11 @@ export class ReceptionService {
           .set({ status: QueueTicketStatus.SUPERSEDED })
           .where('visit_id = :id', { id })
           .andWhere('status IN (:...statuses)', {
-            statuses: [QueueTicketStatus.ACTIVE, QueueTicketStatus.PAUSED],
+            statuses: [
+              QueueTicketStatus.ACTIVE,
+              QueueTicketStatus.CALLED,
+              QueueTicketStatus.PAUSED,
+            ],
           })
           .execute();
       }
@@ -350,6 +382,13 @@ export class ReceptionService {
   async rejectVerification(id: string, dto: RejectVerificationDto, actor: Actor) {
     return this.queue.transaction(async (manager) => {
       const visit = await this.queue.lockVisit(manager, id);
+      const hallTicket = await this.queue.activeTicket(id, QueueTicketKind.HALL, manager);
+      if (!hallTicket || hallTicket.status !== QueueTicketStatus.CALLED) {
+        throw clinicalConflict(
+          'VISIT_STATE_CONFLICT',
+          'Only the patient currently called to the reception desk can be rejected.',
+        );
+      }
       assertTransition(visit.status, VisitStatus.CANCELLED);
       visit.status = VisitStatus.CANCELLED;
       visit.receptionistId = actor.id;
@@ -361,7 +400,7 @@ export class ReceptionService {
         .set({ status: QueueTicketStatus.SUPERSEDED })
         .where('visit_id = :id', { id })
         .andWhere('status IN (:...statuses)', {
-          statuses: [QueueTicketStatus.ACTIVE, QueueTicketStatus.PAUSED],
+          statuses: [QueueTicketStatus.ACTIVE, QueueTicketStatus.CALLED, QueueTicketStatus.PAUSED],
         })
         .execute();
       await this.audit.log(

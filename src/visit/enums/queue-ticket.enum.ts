@@ -5,6 +5,7 @@ export enum QueueTicketKind {
 
 export enum QueueTicketStatus {
   ACTIVE = 'ACTIVE',
+  CALLED = 'CALLED',
   PAUSED = 'PAUSED',
   COMPLETED = 'COMPLETED',
   SUPERSEDED = 'SUPERSEDED',
@@ -14,6 +15,7 @@ export enum QueueTicketStatus {
 export enum QueueTicketOperation {
   HALL_ISSUE = 'HALL_ISSUE',
   HALL_WALK_IN = 'HALL_WALK_IN',
+  HALL_RECEPTION_REQUEST = 'HALL_RECEPTION_REQUEST',
   HALL_APPOINTMENT_CHECK_IN = 'HALL_APPOINTMENT_CHECK_IN',
   CLINIC_ASSIGN = 'CLINIC_ASSIGN',
   HALL_REISSUE = 'HALL_REISSUE',
