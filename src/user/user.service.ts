@@ -1,7 +1,9 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { AuditService } from '../common/audit.service';
 import { User } from '../database/entities/user.entity';
+import { UpdateMyProfileDto } from './dto/update-my-profile.dto';
 import { Role } from './enums/role.enum';
 
 @Injectable()
@@ -9,6 +11,7 @@ export class UserService {
   constructor(
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
+    private readonly audit: AuditService,
   ) {}
 
   /**
@@ -53,5 +56,36 @@ export class UserService {
       throw new NotFoundException(`User with National ID ${nationalId} not found`);
     }
     return user;
+  }
+
+  async getMyProfile(id: string) {
+    return this.findById(id);
+  }
+
+  async updateMyProfile(id: string, dto: UpdateMyProfileDto) {
+    const user = await this.findById(id);
+    const nationalId = dto.nationalId.trim();
+    const existing = await this.userRepository.findOne({ where: { nationalId } });
+    if (existing && existing.id !== id) {
+      throw new ConflictException('National ID is already registered to another patient.');
+    }
+
+    user.name = dto.name.trim();
+    user.dateOfBirth = new Date(dto.dateOfBirth);
+    user.gender = dto.gender.trim();
+    user.phone = dto.phone.trim();
+    user.nationalId = nationalId;
+    user.allergies = dto.allergies.map((allergy) => allergy.trim()).filter(Boolean);
+    user.insuranceCardNumber = dto.insuranceCardNumber?.trim() || undefined;
+    const saved = await this.userRepository.save(user);
+    await this.audit.log({
+      action: 'UPDATE_PATIENT_PROFILE',
+      actorId: id,
+      actorRole: Role.PATIENT,
+      targetEntityType: 'User',
+      targetEntityId: id,
+      metadata: { fields: Object.keys(dto) },
+    });
+    return saved;
   }
 }

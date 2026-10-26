@@ -34,9 +34,12 @@ export interface UserFullDto extends UserPublicDto {
 }
 
 /** /auth/me — authenticated user sees their own profile (no password) */
-export interface MeResponseDto extends UserFullDto {
-  createdAt: Date;
-  updatedAt: Date;
+export interface MeResponseDto {
+  id: string;
+  email: string;
+  name: string;
+  role: string;
+  profileComplete: boolean;
 }
 
 // ─── Visit Dossier ───────────────────────────────────────────────────────────
@@ -159,12 +162,25 @@ export function toUserFull(user: any): UserFullDto | undefined {
   };
 }
 
+export function isPatientProfileComplete(user: any): boolean {
+  return Boolean(
+    user?.name?.trim() &&
+      user.dateOfBirth &&
+      user.gender?.trim() &&
+      user.phone?.trim() &&
+      user.nationalId?.trim() &&
+      user.allergies != null,
+  );
+}
+
 export function toMeResponse(user: any): MeResponseDto | undefined {
   if (!user) return undefined;
   return {
-    ...toUserFull(user)!,
-    createdAt: user.createdAt,
-    updatedAt: user.updatedAt,
+    id: user.id,
+    email: user.email,
+    name: user.name,
+    role: user.role,
+    profileComplete: user.role !== 'PATIENT' || isPatientProfileComplete(user),
   };
 }
 

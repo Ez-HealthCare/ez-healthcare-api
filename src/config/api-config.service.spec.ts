@@ -153,8 +153,11 @@ describe('ApiConfigService', () => {
       { start: '07:00', end: '11:30' },
       { start: '13:00', end: '16:30' },
     ]);
+    expect(config({ QUEUE_ISSUANCE_WINDOWS: '00:00-24:00' }).queueIssuanceWindows).toEqual([
+      { start: '00:00', end: '24:00' },
+    ]);
     for (const value of [
-      '07:00-11:30',
+      '07:00-11:30,',
       '24:00-25:00,13:00-16:30',
       '07:60-11:30,13:00-16:30',
       '07:00-14:00,13:00-16:30',

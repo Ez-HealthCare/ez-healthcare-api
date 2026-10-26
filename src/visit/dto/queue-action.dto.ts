@@ -19,3 +19,10 @@ export class RequeueVisitDto {
   @IsString()
   reason: string;
 }
+
+export class PauseHallTicketDto {
+  @ApiProperty({ description: 'Reason for temporarily skipping a hall ticket' })
+  @IsNotEmpty()
+  @IsString()
+  reason: string;
+}

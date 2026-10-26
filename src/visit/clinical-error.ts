@@ -7,6 +7,7 @@ export const ClinicalErrorCode = {
   ROOM_QUOTA_REACHED: 'ROOM_QUOTA_REACHED',
   TICKET_EXPIRED: 'TICKET_EXPIRED',
   VISIT_STATE_CONFLICT: 'VISIT_STATE_CONFLICT',
+  APPOINTMENT_STATE_CONFLICT: 'APPOINTMENT_STATE_CONFLICT',
 } as const;
 
 export type ClinicalErrorCode = (typeof ClinicalErrorCode)[keyof typeof ClinicalErrorCode];

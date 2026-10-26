@@ -1,5 +1,5 @@
-import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsOptional, IsString } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { IsNotEmpty, IsOptional, IsString, IsUUID } from 'class-validator';
 
 export class CreateHallTicketDto {
   @ApiPropertyOptional({
@@ -9,4 +9,11 @@ export class CreateHallTicketDto {
   @IsOptional()
   @IsString()
   requestReference?: string;
+}
+
+export class CreateWalkInTicketDto {
+  @ApiProperty({ description: 'Existing patient account ID for a walk-in visit' })
+  @IsUUID()
+  @IsNotEmpty()
+  patientId: string;
 }

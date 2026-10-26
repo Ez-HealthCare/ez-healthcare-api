@@ -6,6 +6,7 @@ import { VisitStatus } from '../enums/visit-status.enum';
 import type { VisitVital } from './visit-vital.entity';
 import type { VisitOrder } from './visit-order.entity';
 import type { VisitStep } from './visit-step.entity';
+import type { ReceptionRequest } from '../../reception-request/entities/reception-request.entity';
 
 @Entity('visits')
 export class Visit extends BaseEntity {
@@ -95,4 +96,7 @@ export class Visit extends BaseEntity {
 
   @OneToMany('VisitStep', (step: any) => step.visit)
   steps: VisitStep[];
+
+  @OneToOne('ReceptionRequest', (request: any) => request.visit)
+  receptionRequest?: ReceptionRequest;
 }

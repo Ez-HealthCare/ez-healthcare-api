@@ -18,6 +18,9 @@ import { NotificationModule } from '../notification/notification.module';
 import { QueueTicketService } from './queue-ticket.service';
 import { ReceptionService } from './reception.service';
 import { ClinicQueueService } from './clinic-queue.service';
+import { Appointment } from '../appointment/entities/appointment.entity';
+import { AppointmentService } from '../appointment/appointment.service';
+import { AppointmentController } from '../appointment/appointment.controller';
 
 @Module({
   imports: [
@@ -33,12 +36,19 @@ import { ClinicQueueService } from './clinic-queue.service';
       DoctorSchedule,
       QueueCounter,
       QueueTicket,
+      Appointment,
     ]),
     TriageModule,
     NotificationModule,
   ],
-  controllers: [VisitController],
-  providers: [VisitService, QueueTicketService, ReceptionService, ClinicQueueService],
+  controllers: [VisitController, AppointmentController],
+  providers: [
+    VisitService,
+    QueueTicketService,
+    ReceptionService,
+    ClinicQueueService,
+    AppointmentService,
+  ],
   exports: [VisitService, QueueTicketService, ReceptionService, ClinicQueueService],
 })
 export class VisitModule {}

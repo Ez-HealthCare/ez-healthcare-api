@@ -12,6 +12,7 @@ import { ParaclinicalModule } from './paraclinical/paraclinical.module';
 import { AdminModule } from './admin/admin.module';
 import { AuditModule } from './common/audit.module';
 import { NotificationModule } from './notification/notification.module';
+import { ReceptionRequestModule } from './reception-request/reception-request.module';
 
 @Module({
   imports: [
@@ -19,6 +20,7 @@ import { NotificationModule } from './notification/notification.module';
     DatabaseModule,
     AuditModule,
     NotificationModule,
+    ReceptionRequestModule,
     AuthModule,
     UserModule,
     DepartmentModule,

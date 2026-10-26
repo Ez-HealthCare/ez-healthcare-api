@@ -18,6 +18,7 @@ import { clinicalConflict } from './clinical-error';
 import { AssignClinicDto } from './dto/assign-clinic.dto';
 import { RecordIntakeDto } from './dto/record-intake.dto';
 import { RejectVerificationDto, VerifyVisitDto } from './dto/verify-visit.dto';
+import { PauseHallTicketDto } from './dto/queue-action.dto';
 import { QueueTicket } from './entities/queue-ticket.entity';
 import { VisitVital } from './entities/visit-vital.entity';
 import { Visit } from './entities/visit.entity';
@@ -51,7 +52,10 @@ export class ReceptionService {
       hallTicketNumber: visit.hallTicketNumber,
       clinicTicketNumber: visit.clinicTicketNumber,
       status: visit.status,
+      ticketKind: ticket.kind,
       ticketStatus: ticket.status,
+      callAttempts: ticket.callAttempts,
+      lastCalledAt: ticket.lastCalledAt,
       businessDate: ticket.businessDate,
       expiresAt: ticket.expiresAt,
       patient: {
@@ -168,6 +172,130 @@ export class ReceptionService {
     const latest = new Map<string, QueueTicket>();
     for (const ticket of tickets) latest.set(ticket.visitId, ticket);
     return [...latest.values()].map((ticket) => this.queueVisit(ticket));
+  }
+
+  async callHallTicket(id: string, actor: Actor) {
+    return this.queue.transaction(async (manager) => {
+      const visit = await this.queue.lockVisit(manager, id);
+      if (visit.status !== VisitStatus.HALL_WAITING) {
+        throw clinicalConflict(
+          'VISIT_STATE_CONFLICT',
+          'Only a patient waiting at reception can be called.',
+        );
+      }
+      const ticket = await this.queue.activeTicket(id, QueueTicketKind.HALL, manager);
+      if (!ticket || ticket.status !== QueueTicketStatus.ACTIVE) {
+        throw clinicalConflict('TICKET_EXPIRED', 'Visit has no active hall ticket.');
+      }
+      ticket.callAttempts += 1;
+      ticket.lastCalledAt = new Date();
+      await manager.getRepository(QueueTicket).save(ticket);
+      await this.notifications.create(
+        {
+          userId: visit.patientId,
+          visitId: visit.id,
+          type: 'HALL_TICKET_CALLED',
+          title: 'Mời đến quầy tiếp nhận',
+          message: `Mời số ${visit.hallTicketNumber} đến quầy tiếp nhận.`,
+        },
+        manager,
+      );
+      await this.audit.log(
+        {
+          action: 'CALL_HALL_TICKET',
+          actorId: actor.id,
+          actorRole: actor.role,
+          targetEntityType: 'Visit',
+          targetEntityId: id,
+          metadata: { hallTicketNumber: visit.hallTicketNumber, callAttempts: ticket.callAttempts },
+        },
+        manager,
+      );
+      return {
+        visitId: id,
+        status: visit.status,
+        ticketStatus: ticket.status,
+        callAttempts: ticket.callAttempts,
+        lastCalledAt: ticket.lastCalledAt,
+      };
+    });
+  }
+
+  async pauseHallTicket(id: string, dto: PauseHallTicketDto, actor: Actor) {
+    return this.queue.transaction(async (manager) => {
+      const visit = await this.queue.lockVisit(manager, id);
+      if (visit.status !== VisitStatus.HALL_WAITING) {
+        throw clinicalConflict(
+          'VISIT_STATE_CONFLICT',
+          'Only a patient waiting at reception can be temporarily skipped.',
+        );
+      }
+      const ticket = await this.queue.activeTicket(id, QueueTicketKind.HALL, manager);
+      if (!ticket || ticket.status !== QueueTicketStatus.ACTIVE) {
+        throw clinicalConflict('TICKET_EXPIRED', 'Visit has no active hall ticket.');
+      }
+      ticket.status = QueueTicketStatus.PAUSED;
+      ticket.reissueReason = dto.reason.trim();
+      await manager.getRepository(QueueTicket).save(ticket);
+      await this.audit.log(
+        {
+          action: 'PAUSE_HALL_TICKET',
+          actorId: actor.id,
+          actorRole: actor.role,
+          targetEntityType: 'Visit',
+          targetEntityId: id,
+          metadata: { hallTicketNumber: visit.hallTicketNumber, reason: dto.reason.trim() },
+        },
+        manager,
+      );
+      return { visitId: id, status: visit.status, ticketStatus: ticket.status };
+    });
+  }
+
+  async recallHallTicket(id: string, actor: Actor) {
+    return this.queue.transaction(async (manager) => {
+      const visit = await this.queue.lockVisit(manager, id);
+      if (visit.status !== VisitStatus.HALL_WAITING) {
+        throw clinicalConflict(
+          'VISIT_STATE_CONFLICT',
+          'Only a patient waiting at reception can be recalled.',
+        );
+      }
+      const ticket = await this.queue.activeTicket(id, QueueTicketKind.HALL, manager);
+      if (!ticket) throw clinicalConflict('TICKET_EXPIRED', 'Hall ticket not found.');
+      ticket.status = QueueTicketStatus.ACTIVE;
+      ticket.callAttempts += 1;
+      ticket.lastCalledAt = new Date();
+      await manager.getRepository(QueueTicket).save(ticket);
+      await this.notifications.create(
+        {
+          userId: visit.patientId,
+          visitId: visit.id,
+          type: 'HALL_TICKET_CALLED',
+          title: 'Mời đến quầy tiếp nhận',
+          message: `Mời lại số ${visit.hallTicketNumber} đến quầy tiếp nhận.`,
+        },
+        manager,
+      );
+      await this.audit.log(
+        {
+          action: 'RECALL_HALL_TICKET',
+          actorId: actor.id,
+          actorRole: actor.role,
+          targetEntityType: 'Visit',
+          targetEntityId: id,
+          metadata: { hallTicketNumber: visit.hallTicketNumber, callAttempts: ticket.callAttempts },
+        },
+        manager,
+      );
+      return {
+        visitId: id,
+        status: visit.status,
+        ticketStatus: ticket.status,
+        callAttempts: ticket.callAttempts,
+        lastCalledAt: ticket.lastCalledAt,
+      };
+    });
   }
 
   async verifyVisit(id: string, dto: VerifyVisitDto, actor: Actor) {

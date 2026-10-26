@@ -16,8 +16,7 @@ export const MAX_PATIENT_HALL_REISSUES = 1;
 export const MAX_QUEUE_CALL_ATTEMPTS = 3;
 export const BUSINESS_TIME_ZONE = 'Asia/Ho_Chi_Minh';
 export const BUSINESS_WINDOWS = [
-  { start: '07:00', end: '11:30' },
-  { start: '13:00', end: '16:30' },
+  { start: '00:00', end: '24:00' },
 ] as const;
 export const QUEUE_PRIORITY_CONFIG_KEY = 'BR-QUEUE-PRIORITY';
 export const QUEUE_PRIORITY_DEFAULTS = {

@@ -15,7 +15,7 @@ import { NotificationService } from '../notification/notification.service';
 import { Role } from '../user/enums/role.enum';
 import { getBusinessTime } from './business-time';
 import { clinicalConflict } from './clinical-error';
-import { CreateHallTicketDto } from './dto/create-hall-ticket.dto';
+import { CreateHallTicketDto, CreateWalkInTicketDto } from './dto/create-hall-ticket.dto';
 import { ReissueTicketDto } from './dto/queue-action.dto';
 import { QueueTicket } from './entities/queue-ticket.entity';
 import { Visit } from './entities/visit.entity';
@@ -32,6 +32,17 @@ type TicketIdentity = {
   operation: QueueTicketOperation;
   fingerprint: string;
   visitId?: string;
+};
+
+type ReceptionHallTicketInput = {
+  patientId: string;
+  actor: Actor;
+  idempotencyKey: string;
+  operation: QueueTicketOperation;
+  requestFingerprint: string;
+  businessDate: string;
+  expiresAt: Date;
+  chiefComplaint?: string;
 };
 
 @Injectable()
@@ -272,6 +283,109 @@ export class QueueTicketService {
     throw lastError;
   }
 
+  async runAppointmentCheckIn<T>(
+    idempotencyKey: string,
+    actor: Actor,
+    appointmentId: string,
+    action: (manager: EntityManager) => Promise<T>,
+  ): Promise<T | ReturnType<QueueTicketService['ticketResponse']>> {
+    const operation = QueueTicketOperation.HALL_APPOINTMENT_CHECK_IN;
+    return this.runIdempotent(idempotencyKey, {
+      actor,
+      operation,
+      fingerprint: this.fingerprint({ actorId: actor.id, appointmentId, operation }),
+    }, action);
+  }
+
+  async replayAppointmentCheckIn(
+    idempotencyKey: string,
+    actor: Actor,
+    appointmentId: string,
+    manager: EntityManager,
+  ) {
+    const operation = QueueTicketOperation.HALL_APPOINTMENT_CHECK_IN;
+    return this.replay(
+      idempotencyKey,
+      {
+        actor,
+        operation,
+        fingerprint: this.fingerprint({ actorId: actor.id, appointmentId, operation }),
+      },
+      manager,
+    );
+  }
+
+  async issueReceptionHallTicket(
+    manager: EntityManager,
+    input: ReceptionHallTicketInput,
+  ): Promise<{ visit: Visit; ticket: QueueTicket }> {
+    await this.expireDueTickets(new Date(), manager);
+    await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', [input.patientId]);
+    const patient = await manager.getRepository(User).findOne({ where: { id: input.patientId } });
+    if (!patient || patient.role !== Role.PATIENT || !patient.isActive) {
+      throw new NotFoundException('Active patient record not found.');
+    }
+    const existing = await manager
+      .getRepository(QueueTicket)
+      .createQueryBuilder('ticket')
+      .innerJoin('ticket.visit', 'visit')
+      .where('visit.patient_id = :patientId', { patientId: input.patientId })
+      .andWhere('ticket.business_date = :businessDate', { businessDate: input.businessDate })
+      .andWhere('ticket.status IN (:...statuses)', {
+        statuses: [QueueTicketStatus.ACTIVE, QueueTicketStatus.PAUSED],
+      })
+      .getOne();
+    if (existing) {
+      throw clinicalConflict('VISIT_STATE_CONFLICT', 'Patient already has an active visit today.');
+    }
+    const sequence = await this.nextSequence(
+      manager,
+      QueueTicketKind.HALL,
+      'FACILITY',
+      input.businessDate,
+    );
+    const displayNumber = this.displayNumber(QueueTicketKind.HALL, 'FACILITY', sequence);
+    const visitRepo = manager.getRepository(Visit);
+    const visit = await visitRepo.save(
+      visitRepo.create({
+        patientId: input.patientId,
+        hallTicketNumber: displayNumber,
+        status: VisitStatus.HALL_WAITING,
+        receptionistId: input.actor.id,
+        chiefComplaint: input.chiefComplaint,
+      }),
+    );
+    const ticketRepo = manager.getRepository(QueueTicket);
+    const ticket = await ticketRepo.save(
+      ticketRepo.create({
+        visitId: visit.id,
+        kind: QueueTicketKind.HALL,
+        scopeKey: 'FACILITY',
+        businessDate: input.businessDate,
+        sequence,
+        displayNumber,
+        status: QueueTicketStatus.ACTIVE,
+        issuedById: input.actor.id,
+        idempotencyKey: input.idempotencyKey,
+        operation: input.operation,
+        requestFingerprint: input.requestFingerprint,
+        queuedAt: new Date(),
+        expiresAt: input.expiresAt,
+      }),
+    );
+    await this.notifications.create(
+      {
+        userId: input.patientId,
+        visitId: visit.id,
+        type: 'HALL_TICKET_ISSUED',
+        title: 'Đã cấp số tiếp nhận',
+        message: `Số tiếp nhận của bạn là ${displayNumber}.`,
+      },
+      manager,
+    );
+    return { visit, ticket };
+  }
+
   async createHallTicket(_dto: CreateHallTicketDto, actor: Actor, idempotencyHeader?: string) {
     if (actor.role !== Role.PATIENT)
       throw new ForbiddenException('Only patients may request a hall ticket.');
@@ -360,6 +474,94 @@ export class QueueTicketService {
           targetEntityType: 'Visit',
           targetEntityId: visit.id,
           metadata: { hallTicketNumber: displayNumber, businessDate },
+        },
+        manager,
+      );
+      return this.ticketResponse(visit, ticket);
+    });
+  }
+
+  async createWalkInTicket(
+    dto: CreateWalkInTicketDto,
+    actor: Actor,
+    idempotencyHeader?: string,
+  ) {
+    if (actor.role !== Role.RECEPTIONIST) {
+      throw new ForbiddenException('Only receptionists may create a walk-in ticket.');
+    }
+    const idempotencyKey = this.requireIdempotencyKey(idempotencyHeader);
+    const { businessDate, expiresAt } = this.requireIssuanceWindow();
+    const operation = QueueTicketOperation.HALL_WALK_IN;
+    const identity: TicketIdentity = {
+      actor,
+      operation,
+      fingerprint: this.fingerprint({ actorId: actor.id, operation, patientId: dto.patientId }),
+    };
+    return this.runIdempotent(idempotencyKey, identity, async (manager) => {
+      await this.expireDueTickets(new Date(), manager);
+      await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', [dto.patientId]);
+      const patient = await manager.getRepository(User).findOne({ where: { id: dto.patientId } });
+      if (!patient || patient.role !== Role.PATIENT || !patient.isActive) {
+        throw new NotFoundException('Active patient record not found.');
+      }
+      const existing = await manager
+        .getRepository(QueueTicket)
+        .createQueryBuilder('ticket')
+        .innerJoin('ticket.visit', 'visit')
+        .where('visit.patient_id = :patientId', { patientId: dto.patientId })
+        .andWhere('ticket.business_date = :businessDate', { businessDate })
+        .andWhere('ticket.status IN (:...statuses)', {
+          statuses: [QueueTicketStatus.ACTIVE, QueueTicketStatus.PAUSED],
+        })
+        .getOne();
+      if (existing) {
+        throw clinicalConflict('VISIT_STATE_CONFLICT', 'Patient already has an active visit today.');
+      }
+      const sequence = await this.nextSequence(manager, QueueTicketKind.HALL, 'FACILITY', businessDate);
+      const displayNumber = this.displayNumber(QueueTicketKind.HALL, 'FACILITY', sequence);
+      const visit = await manager.getRepository(Visit).save(
+        manager.getRepository(Visit).create({
+          patientId: dto.patientId,
+          hallTicketNumber: displayNumber,
+          status: VisitStatus.HALL_WAITING,
+          receptionistId: actor.id,
+        }),
+      );
+      const ticket = await manager.getRepository(QueueTicket).save(
+        manager.getRepository(QueueTicket).create({
+          visitId: visit.id,
+          kind: QueueTicketKind.HALL,
+          scopeKey: 'FACILITY',
+          businessDate,
+          sequence,
+          displayNumber,
+          status: QueueTicketStatus.ACTIVE,
+          issuedById: actor.id,
+          idempotencyKey,
+          operation,
+          requestFingerprint: identity.fingerprint,
+          queuedAt: new Date(),
+          expiresAt,
+        }),
+      );
+      await this.notifications.create(
+        {
+          userId: dto.patientId,
+          visitId: visit.id,
+          type: 'HALL_TICKET_ISSUED',
+          title: 'Đã cấp số tiếp nhận',
+          message: `Số tiếp nhận của bạn là ${displayNumber}.`,
+        },
+        manager,
+      );
+      await this.audit.log(
+        {
+          action: 'CREATE_WALK_IN_TICKET',
+          actorId: actor.id,
+          actorRole: actor.role,
+          targetEntityType: 'Visit',
+          targetEntityId: visit.id,
+          metadata: { patientId: dto.patientId, hallTicketNumber: displayNumber, businessDate },
         },
         manager,
       );

@@ -15,11 +15,11 @@ import {
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { VisitService } from './visit.service';
 import { TriageDagService } from '../triage/triage-dag.service';
-import { CreateHallTicketDto } from './dto/create-hall-ticket.dto';
+import { CreateHallTicketDto, CreateWalkInTicketDto } from './dto/create-hall-ticket.dto';
 import { VerifyVisitDto, RejectVerificationDto } from './dto/verify-visit.dto';
 import { AssignClinicDto } from './dto/assign-clinic.dto';
 import { RecordIntakeDto } from './dto/record-intake.dto';
-import { ReissueTicketDto, RequeueVisitDto } from './dto/queue-action.dto';
+import { PauseHallTicketDto, ReissueTicketDto, RequeueVisitDto } from './dto/queue-action.dto';
 import { EmergencyDispatchDto, TransferClinicDto } from './dto/transfer-clinic.dto';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { ConcludeVisitDto } from './dto/conclude-visit.dto';
@@ -60,6 +60,19 @@ export class VisitController {
     return this.queueTicketService.createHallTicket(dto, req.user, idempotencyKey);
   }
 
+  @Post('reception/walk-in')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.RECEPTIONIST)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Reception creates a hall ticket for an existing walk-in patient' })
+  createWalkInTicket(
+    @Body() dto: CreateWalkInTicketDto,
+    @Request() req: any,
+    @Headers('idempotency-key') idempotencyKey?: string,
+  ) {
+    return this.queueTicketService.createWalkInTicket(dto, req.user, idempotencyKey);
+  }
+
   @Get('me/current')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.PATIENT)
@@ -82,6 +95,37 @@ export class VisitController {
   @ApiBearerAuth()
   getExpiredReceptionQueue(@Query('businessDate') businessDate?: string) {
     return this.receptionService.getExpiredReceptionQueue(businessDate);
+  }
+
+  @Put(':id/reception/call')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.RECEPTIONIST)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Reception calls a patient holding an active hall ticket' })
+  callHallTicket(@Param('id') id: string, @Request() req: any) {
+    return this.receptionService.callHallTicket(id, req.user);
+  }
+
+  @Put(':id/reception/pause')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.RECEPTIONIST)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Reception temporarily skips an active hall ticket' })
+  pauseHallTicket(
+    @Param('id') id: string,
+    @Body() dto: PauseHallTicketDto,
+    @Request() req: any,
+  ) {
+    return this.receptionService.pauseHallTicket(id, dto, req.user);
+  }
+
+  @Put(':id/reception/recall')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.RECEPTIONIST)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Reception restores and calls a paused hall ticket' })
+  recallHallTicket(@Param('id') id: string, @Request() req: any) {
+    return this.receptionService.recallHallTicket(id, req.user);
   }
 
   @Get('doctor/rooms')

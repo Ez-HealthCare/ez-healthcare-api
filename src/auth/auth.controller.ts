@@ -17,7 +17,6 @@ import { RequestOtpDto } from './dto/request-otp.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { LoginStaffDto } from './dto/login-staff.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
-import { toMeResponse } from '../common/dto/response.dto';
 import { clearSessionCookies, readCookie, setSessionCookies } from './auth.config';
 import {
   AUTH_CONTROLLER_PATH,
@@ -84,8 +83,8 @@ export class AuthController {
   @Get(AUTH_PATHS.ME)
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Return the authenticated identity and role, without password' })
+  @ApiOperation({ summary: 'Return authenticated identity and Patient profile completion state' })
   getMe(@Req() req: Request & { user: unknown }) {
-    return toMeResponse(req.user);
+    return this.authService.getMe((req.user as { id: string }).id);
   }
 }

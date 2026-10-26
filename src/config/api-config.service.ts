@@ -92,18 +92,18 @@ export class ApiConfigService {
       BUSINESS_WINDOWS.map((window) => `${window.start}-${window.end}`).join(','),
     );
     const windows = raw.split(',').map((entry) => {
-      const match = /^([01]\d|2[0-3]):([0-5]\d)-([01]\d|2[0-3]):([0-5]\d)$/.exec(entry.trim());
+      const match = /^([01]\d|2[0-3]):([0-5]\d)-(?:([01]\d|2[0-3]):([0-5]\d)|(24):00)$/.exec(entry.trim());
       const start = match ? `${match[1]}:${match[2]}` : '';
-      const end = match ? `${match[3]}:${match[4]}` : '';
+      const end = match ? (match[5] ? '24:00' : `${match[3]}:${match[4]}`) : '';
       if (!match || start >= end) {
         throw new Error('QUEUE_ISSUANCE_WINDOWS must use HH:mm-HH:mm comma-separated ranges');
       }
       return { start, end };
     });
-    if (windows.length !== 2) {
-      throw new Error('QUEUE_ISSUANCE_WINDOWS must define exactly morning and afternoon ranges');
+    if (windows.length < 1 || windows.length > 2) {
+      throw new Error('QUEUE_ISSUANCE_WINDOWS must define one or two non-overlapping ranges');
     }
-    if (windows[0].end > windows[1].start) {
+    if (windows.length === 2 && windows[0].end > windows[1].start) {
       throw new Error('QUEUE_ISSUANCE_WINDOWS ranges must not overlap');
     }
     return windows;

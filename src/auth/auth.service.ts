@@ -18,6 +18,7 @@ import { AuthSession } from './entities/auth-session.entity';
 import { RequestOtpDto } from './dto/request-otp.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { LoginStaffDto } from './dto/login-staff.dto';
+import { toMeResponse } from '../common/dto/response.dto';
 import {
   ACCESS_SECONDS,
   OTP_MIN_VALUE,
@@ -241,5 +242,11 @@ export class AuthService {
       if (!(error instanceof UnauthorizedException)) throw error;
     }
     return { success: true };
+  }
+
+  async getMe(id: string) {
+    const user = await this.users.findOne({ where: { id, isActive: true } });
+    if (!user) throw new UnauthorizedException('Account is inactive.');
+    return toMeResponse(user);
   }
 }
