@@ -66,7 +66,8 @@ describe('Extracted constants used by production code', () => {
 
   it('keeps seed department references valid and production allergy lookup intact', () => {
     const seedCodes = new Set(SEED_DEPARTMENTS.map((dept) => dept.code));
-    expect(seedCodes.size).toBe(9);
+    expect(seedCodes.size).toBe(Object.keys(DEPARTMENT_CODES).length);
+    expect(seedCodes.size).toBe(SEED_DEPARTMENTS.length);
     for (const code of Object.values(DEPARTMENT_CODES)) expect(seedCodes.has(code)).toBe(true);
     for (const rule of SEED_RULES) expect(seedCodes.has(rule.targetDeptCode)).toBe(true);
     expect(checkAllergyConflict('Amoxicillin 500mg', ['Penicillin'])).toBe('Penicillin');

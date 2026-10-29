@@ -218,6 +218,14 @@ export const SEED_DEPARTMENTS = [
     maxQuotaPerSlot: 40,
   },
   {
+    code: DEPARTMENT_CODES.CARDIOLOGY,
+    name: 'Cardiology Consultation Clinic',
+    roomType: RoomType.CONSULTATION,
+    floor: 1,
+    avgServiceTimeMin: 15,
+    maxQuotaPerSlot: 35,
+  },
+  {
     code: DEPARTMENT_CODES.ULTRASOUND,
     name: 'Abdominal Ultrasound Imaging',
     roomType: RoomType.IMAGING,
@@ -228,6 +236,22 @@ export const SEED_DEPARTMENTS = [
   {
     code: DEPARTMENT_CODES.PULMONOLOGY,
     name: 'Pulmonology Consultation Clinic',
+    roomType: RoomType.CONSULTATION,
+    floor: 1,
+    avgServiceTimeMin: 15,
+    maxQuotaPerSlot: 35,
+  },
+  {
+    code: DEPARTMENT_CODES.NEPHROLOGY,
+    name: 'Nephrology & Urology Clinic',
+    roomType: RoomType.CONSULTATION,
+    floor: 1,
+    avgServiceTimeMin: 15,
+    maxQuotaPerSlot: 35,
+  },
+  {
+    code: DEPARTMENT_CODES.GERIATRICS,
+    name: 'Geriatrics Consultation Clinic',
     roomType: RoomType.CONSULTATION,
     floor: 1,
     avgServiceTimeMin: 15,

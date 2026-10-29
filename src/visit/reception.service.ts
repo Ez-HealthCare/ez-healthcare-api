@@ -39,25 +39,26 @@ export class ReceptionService {
   constructor(
     @InjectRepository(QueueTicket)
     private readonly tickets: Repository<QueueTicket>,
+    @InjectRepository(Visit)
+    private readonly visits: Repository<Visit>,
     private readonly queue: QueueTicketService,
     private readonly config: ApiConfigService,
     private readonly notifications: NotificationService,
     private readonly audit: AuditService,
   ) {}
 
-  private queueVisit(ticket: QueueTicket) {
-    const visit = ticket.visit;
+  private queueVisit(visit: Visit, ticket?: QueueTicket) {
     return {
       visitId: visit.id,
       hallTicketNumber: visit.hallTicketNumber,
       clinicTicketNumber: visit.clinicTicketNumber,
       status: visit.status,
-      ticketKind: ticket.kind,
-      ticketStatus: ticket.status,
-      callAttempts: ticket.callAttempts,
-      lastCalledAt: ticket.lastCalledAt,
-      businessDate: ticket.businessDate,
-      expiresAt: ticket.expiresAt,
+      ticketKind: ticket?.kind,
+      ticketStatus: ticket?.status,
+      callAttempts: ticket?.callAttempts,
+      lastCalledAt: ticket?.lastCalledAt,
+      businessDate: ticket?.businessDate,
+      expiresAt: ticket?.expiresAt,
       patient: {
         id: visit.patient.id,
         name: visit.patient.name,
@@ -67,6 +68,9 @@ export class ReceptionService {
         allergies: visit.patient.allergies,
       },
       chiefComplaint: visit.chiefComplaint,
+      symptomOnset: visit.symptomOnset,
+      symptomDuration: visit.symptomDuration,
+      symptomSeverity: visit.symptomSeverity,
       intakeCompleted: !!visit.intakeCompletedAt,
       isPriority: visit.isPriority,
       priorityReason: visit.priorityReason,
@@ -143,7 +147,16 @@ export class ReceptionService {
           Number(b.visit.isPriority) - Number(a.visit.isPriority) ||
           a.queuedAt.getTime() - b.queuedAt.getTime(),
       )
-      .map((ticket) => this.queueVisit(ticket));
+      .map((ticket) => this.queueVisit(ticket.visit, ticket));
+  }
+
+  async getTriageQueue() {
+    const visits = await this.visits.find({
+      where: { status: VisitStatus.TRIAGE_PENDING },
+      relations: { patient: true, vital: true, currentDepartment: true },
+      order: { isPriority: 'DESC', createdAt: 'ASC' },
+    });
+    return visits.map((visit) => this.queueVisit(visit));
   }
 
   async getExpiredReceptionQueue(businessDate?: string) {
@@ -159,7 +172,7 @@ export class ReceptionService {
     });
     const latest = new Map<string, QueueTicket>();
     for (const ticket of tickets) latest.set(ticket.visitId, ticket);
-    return [...latest.values()].map((ticket) => this.queueVisit(ticket));
+    return [...latest.values()].map((ticket) => this.queueVisit(ticket.visit, ticket));
   }
 
   async callHallTicket(id: string, actor: Actor) {

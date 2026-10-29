@@ -89,6 +89,15 @@ export class VisitController {
     return this.receptionService.getReceptionQueue();
   }
 
+  @Get('triage/queue')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.NURSE, Role.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Nurse: retrieve triage waiting queue' })
+  getTriageQueue() {
+    return this.receptionService.getTriageQueue();
+  }
+
   @Post('reception/call-next')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.RECEPTIONIST)
@@ -120,11 +129,7 @@ export class VisitController {
   @Roles(Role.RECEPTIONIST)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Reception temporarily skips an active hall ticket' })
-  pauseHallTicket(
-    @Param('id') id: string,
-    @Body() dto: PauseHallTicketDto,
-    @Request() req: any,
-  ) {
+  pauseHallTicket(@Param('id') id: string, @Body() dto: PauseHallTicketDto, @Request() req: any) {
     return this.receptionService.pauseHallTicket(id, dto, req.user);
   }
 
