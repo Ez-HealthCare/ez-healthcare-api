@@ -229,16 +229,29 @@ async function seedDemoScenarios(
   }
 
   const visits = new Map<string, Visit>();
+  const newFixtures = new Set<string>();
   for (const [index, fixture] of DEMO_VISITS.entries()) {
     const patient = users.get(fixture.patientEmail);
     const department = fixture.departmentCode ? departments.get(fixture.departmentCode) : undefined;
     const doctor = fixture.currentDoctorEmail ? users.get(fixture.currentDoctorEmail) : undefined;
-    if (!patient || (fixture.departmentCode && !department) || (fixture.currentDoctorEmail && !doctor)) {
+    if (
+      !patient ||
+      (fixture.departmentCode && !department) ||
+      (fixture.currentDoctorEmail && !doctor)
+    ) {
       throw new Error(`Demo fixture ${fixture.key} is missing its required user or department.`);
     }
 
     let visit = await visitRepo.findOne({ where: { hallTicketNumber: fixture.hallTicketNumber } });
-    visit ??= visitRepo.create({ patientId: patient.id, hallTicketNumber: fixture.hallTicketNumber });
+    if (visit) {
+      visits.set(fixture.key, visit);
+      continue;
+    }
+    newFixtures.add(fixture.key);
+    visit = visitRepo.create({
+      patientId: patient.id,
+      hallTicketNumber: fixture.hallTicketNumber,
+    });
     Object.assign(visit, {
       patientId: patient.id,
       hallTicketNumber: fixture.hallTicketNumber,
@@ -253,9 +266,15 @@ async function seedDemoScenarios(
       chiefComplaint: fixture.chiefComplaint,
       symptomOnset: fixture.intakeCompleted ? 'Hôm nay' : undefined,
       symptomDuration: fixture.intakeCompleted ? '2 ngày' : undefined,
-      symptomSeverity: fixture.redFlag ? 'Nặng' : fixture.intakeCompleted ? 'Trung bình' : undefined,
+      symptomSeverity: fixture.redFlag
+        ? 'Nặng'
+        : fixture.intakeCompleted
+          ? 'Trung bình'
+          : undefined,
       isVerified: fixture.status !== VisitStatus.HALL_WAITING,
-      intakeCompletedAt: fixture.intakeCompleted ? new Date(Date.now() - 20 * 60 * 1000) : undefined,
+      intakeCompletedAt: fixture.intakeCompleted
+        ? new Date(Date.now() - 20 * 60 * 1000)
+        : undefined,
       hallReissueCount: 0,
     });
     visit = await visitRepo.save(visit);
@@ -266,7 +285,9 @@ async function seedDemoScenarios(
       .update(QueueTicket)
       .set({ status: QueueTicketStatus.SUPERSEDED })
       .where('visit_id = :visitId', { visitId: visit.id })
-      .andWhere('idempotency_key <> :idempotencyKey', { idempotencyKey: `demo-seed-${fixture.key}` })
+      .andWhere('idempotency_key <> :idempotencyKey', {
+        idempotencyKey: `demo-seed-${fixture.key}`,
+      })
       .execute();
 
     let ticket = await ticketRepo.findOne({
@@ -292,8 +313,7 @@ async function seedDemoScenarios(
       requestFingerprint: `${fixture.key}`.padEnd(64, '0').slice(0, 64),
       queuedAt: new Date(Date.now() - (index + 1) * 5 * 60 * 1000),
       expiresAt,
-      callAttempts:
-        fixture.callAttempts ?? (fixture.status === VisitStatus.CLINIC_CALLED ? 1 : 0),
+      callAttempts: fixture.callAttempts ?? (fixture.status === VisitStatus.CLINIC_CALLED ? 1 : 0),
       lastCalledAt: fixture.lastCalledMinutesAgo
         ? new Date(Date.now() - fixture.lastCalledMinutesAgo * 60 * 1000)
         : fixture.status === VisitStatus.CLINIC_CALLED
@@ -318,7 +338,9 @@ async function seedDemoScenarios(
         news2Score: fixture.redFlag ? 9 : 0,
         news2Risk: fixture.redFlag ? 'HIGH' : 'LOW',
         isRedFlag: !!fixture.redFlag,
-        redFlagReason: fixture.redFlag ? 'Hypotension and hypoxia require emergency dispatch' : undefined,
+        redFlagReason: fixture.redFlag
+          ? 'Hypotension and hypoxia require emergency dispatch'
+          : undefined,
         notes: 'Demo vital signs for local workflow testing',
       });
       await vitalRepo.save(vital);
@@ -333,7 +355,7 @@ async function seedDemoScenarios(
   }
 
   const pendingVisit = visits.get('paraclinical-pending');
-  if (pendingVisit) {
+  if (pendingVisit && newFixtures.has('paraclinical-pending')) {
     let order = await orderRepo.findOne({ where: { visitId: pendingVisit.id } });
     order ??= orderRepo.create({ visitId: pendingVisit.id, doctorId: doctor.id });
     Object.assign(order, {
@@ -362,7 +384,7 @@ async function seedDemoScenarios(
   }
 
   const recallVisit = visits.get('re-exam-calling');
-  if (recallVisit) {
+  if (recallVisit && newFixtures.has('re-exam-calling')) {
     let order = await orderRepo.findOne({ where: { visitId: recallVisit.id } });
     order ??= orderRepo.create({ visitId: recallVisit.id, doctorId: doctor.id });
     Object.assign(order, {
@@ -385,7 +407,10 @@ async function seedDemoScenarios(
     });
     step = await stepRepo.save(step);
     let result = await resultRepo.findOne({ where: { stepId: step.id } });
-    result ??= resultRepo.create({ stepId: step.id, technicianId: users.get('lab.tech@ezhealthcare.com')!.id });
+    result ??= resultRepo.create({
+      stepId: step.id,
+      technicianId: users.get('lab.tech@ezhealthcare.com')!.id,
+    });
     Object.assign(result, {
       technicianId: users.get('lab.tech@ezhealthcare.com')!.id,
       serviceName: bloodLab.name,
@@ -478,7 +503,9 @@ async function seedDemoAppointments(
     const department = fixture.departmentCode ? departments.get(fixture.departmentCode) : undefined;
     const visit = fixture.visitKey ? visits.get(fixture.visitKey) : undefined;
     if (!patient || (fixture.departmentCode && !department) || (fixture.visitKey && !visit)) {
-      throw new Error(`Demo appointment ${fixture.appointmentCode} is missing a required relation.`);
+      throw new Error(
+        `Demo appointment ${fixture.appointmentCode} is missing a required relation.`,
+      );
     }
 
     let appointment = await appointmentRepo.findOne({
@@ -497,7 +524,9 @@ async function seedDemoAppointments(
       visitId: visit?.id,
       cancelledAt: fixture.status === AppointmentStatus.CANCELLED ? new Date() : undefined,
       cancellationReason:
-        fixture.status === AppointmentStatus.CANCELLED ? 'Patient requested cancellation.' : undefined,
+        fixture.status === AppointmentStatus.CANCELLED
+          ? 'Patient requested cancellation.'
+          : undefined,
     });
     await appointmentRepo.save(appointment);
   }
@@ -606,20 +635,49 @@ async function runSeed() {
 
   // 4. Keep the demo usable across weekends and midnight without manual reseeding.
   console.log('--- 4. SEEDING 14 DAYS OF DOCTOR SCHEDULES ---');
-  const doctors = await userRepo.find({ where: { role: Role.DOCTOR } });
+  const doctors = await userRepo.find({ where: { role: Role.DOCTOR }, order: { email: 'ASC' } });
+  const seededOrder = new Map(
+    SEED_USERS.filter((user) => user.role === Role.DOCTOR).map((user, index) => [
+      user.email,
+      index,
+    ]),
+  );
+  doctors.sort(
+    (a, b) =>
+      (seededOrder.get(a.email) ?? 999) - (seededOrder.get(b.email) ?? 999) ||
+      a.email.localeCompare(b.email),
+  );
   const rooms = [...deptMap.values()].filter((dept) => dept.roomType === 'CONSULTATION');
+  const preferredRooms = new Map<string, Department>();
+  for (const doctor of doctors) {
+    const latest = await scheduleRepo.findOne({
+      where: { doctorId: doctor.id },
+      order: { shiftDate: 'DESC' },
+    });
+    if (latest) {
+      const preferred = await deptRepo.findOne({
+        where: { id: latest.departmentId, isActive: true },
+      });
+      if (preferred?.roomType === 'CONSULTATION') preferredRooms.set(doctor.id, preferred);
+    }
+  }
   const { businessDate } = getBusinessTime();
   for (let dayOffset = 0; dayOffset < 14; dayOffset += 1) {
     const shiftDate = new Date(`${businessDate}T00:00:00.000Z`);
     shiftDate.setUTCDate(shiftDate.getUTCDate() + dayOffset);
     for (const [index, doctor] of doctors.entries()) {
-      const room = rooms[index % rooms.length];
-      if (!room) break;
+      const room = preferredRooms.get(doctor.id) || rooms[index];
+      if (!room) continue;
       for (const shiftType of [ShiftType.MORNING, ShiftType.AFTERNOON]) {
         let schedule = await scheduleRepo.findOne({
           where: { doctorId: doctor.id, shiftDate, shiftType },
         });
-        schedule ??= scheduleRepo.create({ doctorId: doctor.id, shiftDate, shiftType });
+        if (schedule) continue;
+        const occupied = await scheduleRepo.findOne({
+          where: { departmentId: room.id, shiftDate, shiftType },
+        });
+        if (occupied) continue;
+        schedule = scheduleRepo.create({ doctorId: doctor.id, shiftDate, shiftType });
         schedule.departmentId = room.id;
         schedule.maxQuota = room.maxQuotaPerSlot;
         await scheduleRepo.save(schedule);
@@ -648,7 +706,11 @@ async function runSeed() {
     new Map(allUsers.map((user) => [user.email, user])),
     deptMap,
   );
-  await seedDemoAppointments(new Map(allUsers.map((user) => [user.email, user])), deptMap, demoVisits);
+  await seedDemoAppointments(
+    new Map(allUsers.map((user) => [user.email, user])),
+    deptMap,
+    demoVisits,
+  );
 
   await dataSource.destroy();
   console.log('🎉 Clinical Foundation Seed completed successfully in English!');

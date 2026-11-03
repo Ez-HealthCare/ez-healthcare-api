@@ -1,6 +1,8 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { QueryFailedError, Repository } from 'typeorm';
+import { Role } from '../user/enums/role.enum';
+import { RoomType } from '../department/enums/room-type.enum';
 import { Department } from '../department/entities/department.entity';
 import { DoctorSchedule } from '../department/entities/doctor-schedule.entity';
 import { SystemConfig } from './entities/system-config.entity';
@@ -41,12 +43,12 @@ export class AdminService {
 
   async createSchedule(dto: CreateScheduleDto) {
     const doctor = await this.userRepository.findOne({ where: { id: dto.doctorId } });
-    if (!doctor) {
+    if (!doctor || doctor.role !== Role.DOCTOR || !doctor.isActive) {
       throw new NotFoundException(`Doctor with ID ${dto.doctorId} not found`);
     }
 
     const dept = await this.departmentRepository.findOne({ where: { code: dto.departmentCode } });
-    if (!dept) {
+    if (!dept || !dept.isActive || dept.roomType !== RoomType.CONSULTATION) {
       throw new NotFoundException(`Department with code ${dto.departmentCode} not found`);
     }
 
@@ -65,6 +67,16 @@ export class AdminService {
       );
     }
 
+    const roomCollision = await this.scheduleRepository.findOne({
+      where: {
+        departmentId: dept.id,
+        shiftDate: new Date(dto.shiftDate),
+        shiftType: dto.shiftType,
+      },
+    });
+    if (roomCollision)
+      throw new ConflictException('Room already has a doctor assigned for this date and shift.');
+
     const schedule = this.scheduleRepository.create({
       doctorId: dto.doctorId,
       departmentId: dept.id,
@@ -73,7 +85,19 @@ export class AdminService {
       maxQuota: dto.maxQuota || 40,
     });
 
-    return await this.scheduleRepository.save(schedule);
+    try {
+      return await this.scheduleRepository.save(schedule);
+    } catch (error) {
+      if (
+        error instanceof QueryFailedError &&
+        (error.driverError as { code?: string }).code === '23505'
+      ) {
+        throw new ConflictException(
+          'Doctor or room has already been assigned for this date and shift.',
+        );
+      }
+      throw error;
+    }
   }
 
   async getConfigs() {

@@ -17,6 +17,7 @@ import { getBusinessTime } from './business-time';
 import { clinicalConflict } from './clinical-error';
 import { AssignClinicDto } from './dto/assign-clinic.dto';
 import { RecordIntakeDto } from './dto/record-intake.dto';
+import { ReceptionRecordsQueryDto } from './dto/reception-records-query.dto';
 import { RejectVerificationDto, VerifyVisitDto } from './dto/verify-visit.dto';
 import { PauseHallTicketDto } from './dto/queue-action.dto';
 import { QueueTicket } from './entities/queue-ticket.entity';
@@ -53,6 +54,7 @@ export class ReceptionService {
       hallTicketNumber: visit.hallTicketNumber,
       clinicTicketNumber: visit.clinicTicketNumber,
       status: visit.status,
+      returnReportedAt: visit.returnReportedAt,
       ticketKind: ticket?.kind,
       ticketStatus: ticket?.status,
       callAttempts: ticket?.callAttempts,
@@ -111,9 +113,14 @@ export class ReceptionService {
       hallTicketNumber: visit.hallTicketNumber,
       clinicTicketNumber: visit.clinicTicketNumber,
       status: visit.status,
+      returnReportedAt: visit.returnReportedAt,
       room: visit.currentDepartment
         ? { code: visit.currentDepartment.code, name: visit.currentDepartment.name }
         : null,
+      canReportReturn:
+        visit.status === VisitStatus.TEMPORARILY_ABSENT &&
+        ticket.kind === QueueTicketKind.CLINIC &&
+        ticket.status === QueueTicketStatus.PAUSED,
       canPatientReissue:
         ticket.status === QueueTicketStatus.ACTIVE &&
         ticket.kind === QueueTicketKind.HALL &&
@@ -148,6 +155,75 @@ export class ReceptionService {
           a.queuedAt.getTime() - b.queuedAt.getTime(),
       )
       .map((ticket) => this.queueVisit(ticket.visit, ticket));
+  }
+
+  async getReceptionRecords(input: ReceptionRecordsQueryDto) {
+    await this.queue.expireDueTickets();
+    const businessDate =
+      input.businessDate ||
+      getBusinessTime(new Date(), this.config.queueIssuanceWindows).businessDate;
+    const query = this.visits
+      .createQueryBuilder('visit')
+      .innerJoinAndSelect('visit.patient', 'patient')
+      .leftJoinAndSelect('visit.currentDepartment', 'department')
+      .where(
+        'EXISTS (SELECT 1 FROM queue_tickets day_ticket WHERE day_ticket.visit_id = visit.id AND day_ticket.business_date = :businessDate)',
+        { businessDate },
+      );
+    if (input.status) query.andWhere('visit.status = :status', { status: input.status });
+    if (input.search?.trim()) {
+      // Search both current and superseded numbers so a reissued ticket remains traceable.
+      query.andWhere(
+        "(patient.name ILIKE :search ESCAPE '!' OR patient.nationalId ILIKE :search ESCAPE '!' OR patient.insuranceCardNumber ILIKE :search ESCAPE '!' OR CAST(patient.id AS text) ILIKE :search ESCAPE '!' OR CAST(visit.id AS text) ILIKE :search ESCAPE '!' OR EXISTS (SELECT 1 FROM queue_tickets search_ticket WHERE search_ticket.visit_id = visit.id AND search_ticket.display_number ILIKE :search ESCAPE '!'))",
+        {
+          search: '%' + input.search.trim().replace(/[!%_]/g, (character) => '!' + character) + '%',
+        },
+      );
+    }
+    const [visits, total] = await query
+      .orderBy('visit.created_at', 'DESC')
+      .addOrderBy('visit.id', 'DESC')
+      .skip((input.page - 1) * input.pageSize)
+      .take(input.pageSize)
+      .getManyAndCount();
+    const tickets = visits.length
+      ? await this.tickets.find({
+          where: { visitId: In(visits.map((visit) => visit.id)) },
+          order: { createdAt: 'DESC', id: 'DESC' },
+        })
+      : [];
+    const byVisit = new Map<string, QueueTicket[]>();
+    for (const ticket of tickets) {
+      const history = byVisit.get(ticket.visitId) || [];
+      history.push(ticket);
+      byVisit.set(ticket.visitId, history);
+    }
+    return {
+      businessDate,
+      total,
+      page: input.page,
+      pageSize: input.pageSize,
+      items: visits.map((visit) => {
+        const history = byVisit.get(visit.id) || [];
+        return {
+          ...this.queueVisit(visit, history[0]),
+          updatedAt: visit.updatedAt,
+          isVerified: visit.isVerified,
+          ticketHistory: history.map((ticket) => ({
+            id: ticket.id,
+            kind: ticket.kind,
+            number: ticket.displayNumber,
+            status: ticket.status,
+            businessDate: ticket.businessDate,
+            createdAt: ticket.createdAt,
+            queuedAt: ticket.queuedAt,
+            lastCalledAt: ticket.lastCalledAt,
+            callAttempts: ticket.callAttempts,
+            reissueReason: ticket.reissueReason,
+          })),
+        };
+      }),
+    };
   }
 
   async getTriageQueue() {

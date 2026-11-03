@@ -106,7 +106,7 @@ export class TriageDagService {
   ) {
     const visit = await this.visitRepository.findOne({
       where: { id: visitId },
-      relations: { initialDepartment: true, vital: true },
+      relations: { initialDepartment: true, currentDepartment: true, vital: true },
     });
 
     if (!visit) {
@@ -170,9 +170,11 @@ export class TriageDagService {
     }
 
     // 3. Graph Vertices & Directed Edges
-    const clinicCode = visit.initialDepartment
-      ? visit.initialDepartment.code
-      : DEPARTMENT_CODES.GENERAL_MEDICINE;
+    const clinicCode = visit.currentDepartment
+      ? visit.currentDepartment.code
+      : visit.initialDepartment
+        ? visit.initialDepartment.code
+        : DEPARTMENT_CODES.GENERAL_MEDICINE;
     const cleanOrders = Array.from(new Set(dto.orders.filter((c) => c !== clinicCode)));
     const vertices = [...cleanOrders, clinicCode];
     const edges: DagEdge[] = [];

@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsEnum, IsNotEmpty, IsOptional, IsString } from 'class-validator';
+import { IsEnum, IsNotEmpty, IsOptional, IsString, Matches, MaxLength } from 'class-validator';
 import { QueueTicketKind } from '../enums/queue-ticket.enum';
 
 export class ReissueTicketDto {
@@ -17,6 +17,8 @@ export class RequeueVisitDto {
   @ApiProperty({ description: 'Reason for returning an absent patient to the queue' })
   @IsNotEmpty()
   @IsString()
+  @Matches(/\S/)
+  @MaxLength(1000)
   reason: string;
 }
 

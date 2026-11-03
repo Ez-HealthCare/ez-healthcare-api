@@ -6,6 +6,7 @@ import {
   HttpCode,
   HttpStatus,
   Param,
+  ParseUUIDPipe,
   Post,
   Put,
   Query,
@@ -14,11 +15,14 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { VisitService } from './visit.service';
+import { PatientHistoryQueryDto } from './dto/patient-history-query.dto';
+import { DoctorHistoryQueryDto } from './dto/doctor-history-query.dto';
 import { TriageDagService } from '../triage/triage-dag.service';
 import { CreateHallTicketDto, CreateWalkInTicketDto } from './dto/create-hall-ticket.dto';
 import { VerifyVisitDto, RejectVerificationDto } from './dto/verify-visit.dto';
 import { AssignClinicDto } from './dto/assign-clinic.dto';
 import { RecordIntakeDto } from './dto/record-intake.dto';
+import { ReceptionRecordsQueryDto } from './dto/reception-records-query.dto';
 import { PauseHallTicketDto, ReissueTicketDto, RequeueVisitDto } from './dto/queue-action.dto';
 import { EmergencyDispatchDto, TransferClinicDto } from './dto/transfer-clinic.dto';
 import { CreateOrderDto } from './dto/create-order.dto';
@@ -81,12 +85,55 @@ export class VisitController {
     return this.receptionService.getMyCurrentVisit(req.user.id);
   }
 
+  @Get('me/history')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.PATIENT)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Patient: paginated history of their own visits and conclusions' })
+  getMyHistory(@Query() query: PatientHistoryQueryDto, @Request() req: any) {
+    return this.visitService.getPatientHistory(req.user.id, query);
+  }
+
+  @Get('doctor/history')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.DOCTOR)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      'Doctor: completed visits signed by the authenticated doctor, independent of current shifts',
+  })
+  getDoctorHistory(@Query() query: DoctorHistoryQueryDto, @Request() req: any) {
+    return this.visitService.getDoctorHistory(req.user.id, query);
+  }
+
+  @Get('doctor/history/:id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.DOCTOR)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Doctor: read-only conclusion and prescription for their own completed visit',
+  })
+  getDoctorHistoryDetail(@Param('id', new ParseUUIDPipe()) id: string, @Request() req: any) {
+    return this.visitService.getDoctorHistoryDetail(id, req.user.id);
+  }
+
   @Get('reception/queue')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.RECEPTIONIST)
   @ApiBearerAuth()
   getReceptionQueue() {
     return this.receptionService.getReceptionQueue();
+  }
+
+  @Get('reception/records')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.RECEPTIONIST)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Reception: search all visits with a ticket on the selected business date',
+  })
+  getReceptionRecords(@Query() query: ReceptionRecordsQueryDto) {
+    return this.receptionService.getReceptionRecords(query);
   }
 
   @Get('triage/queue')
@@ -269,9 +316,18 @@ export class VisitController {
     return this.clinicQueueService.startExamination(id, req.user.id);
   }
 
+  @Post(':id/report-return')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.PATIENT)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Patient reports being back at their consultation room after absence' })
+  reportReturn(@Param('id') id: string, @Request() req: any) {
+    return this.clinicQueueService.reportPatientReturn(id, req.user.id);
+  }
+
   @Post(':id/requeue')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.NURSE, Role.RECEPTIONIST)
+  @Roles(Role.DOCTOR, Role.NURSE, Role.RECEPTIONIST)
   @ApiBearerAuth()
   requeueVisit(@Param('id') id: string, @Body() dto: RequeueVisitDto, @Request() req: any) {
     return this.clinicQueueService.requeueVisit(id, dto, req.user);

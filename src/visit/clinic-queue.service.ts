@@ -14,6 +14,8 @@ import { RequeueVisitDto } from './dto/queue-action.dto';
 import { TransferClinicDto } from './dto/transfer-clinic.dto';
 import { QueueTicket } from './entities/queue-ticket.entity';
 import { Visit } from './entities/visit.entity';
+import { VisitStep } from './entities/visit-step.entity';
+import { StepStatus } from './enums/step-status.enum';
 import {
   QueueTicketKind,
   QueueTicketOperation,
@@ -45,6 +47,11 @@ export class ClinicQueueService {
       relations: { department: true },
       order: { shiftType: 'ASC' },
     });
+    for (const schedule of schedules) {
+      await this.queue.transaction((manager) =>
+        this.assertDoctorAssignment(doctorId, schedule.departmentId, manager),
+      );
+    }
     return schedules.map((schedule) => ({
       code: schedule.department.code,
       name: schedule.department.name,
@@ -73,7 +80,7 @@ export class ClinicQueueService {
         businessDate,
         status: In([QueueTicketStatus.ACTIVE, QueueTicketStatus.PAUSED]),
       },
-      relations: { visit: { patient: true, vital: true } },
+      relations: { visit: { patient: true, vital: true, currentDoctor: true } },
       order: { queuedAt: 'ASC' },
     });
     const waitingQueue = tickets
@@ -91,6 +98,10 @@ export class ClinicQueueService {
         patientName: ticket.visit.patient?.name ?? '—',
         chiefComplaint: ticket.visit.chiefComplaint,
         status: ticket.visit.status,
+        returnReportedAt: ticket.visit.returnReportedAt,
+        currentDoctor: ticket.visit.currentDoctor
+          ? { id: ticket.visit.currentDoctor.id, name: ticket.visit.currentDoctor.name }
+          : null,
         isPriority: ticket.visit.isPriority,
         priorityReason: ticket.visit.priorityReason,
         queuedAt: ticket.queuedAt,
@@ -110,13 +121,14 @@ export class ClinicQueueService {
     const inProgressVisits = await this.schedules.manager.getRepository(Visit).find({
       where: {
         currentDepartmentId: department.id,
+        ...(actor.role === Role.DOCTOR ? { currentDoctorId: actor.id } : {}),
         status: In([
           VisitStatus.IN_EXAMINATION,
           VisitStatus.RE_EXAM_CALLING,
           VisitStatus.PARACLINICAL_PENDING,
         ]),
       },
-      relations: { patient: true, vital: true },
+      relations: { patient: true, vital: true, currentDoctor: true },
       order: { updatedAt: 'DESC' },
     });
 
@@ -142,6 +154,10 @@ export class ClinicQueueService {
         patientName: v.patient?.name ?? '—',
         chiefComplaint: v.chiefComplaint,
         status: v.status,
+        returnReportedAt: v.returnReportedAt,
+        currentDoctor: v.currentDoctor
+          ? { id: v.currentDoctor.id, name: v.currentDoctor.name }
+          : null,
         isPriority: v.isPriority,
         priorityReason: v.priorityReason,
         queuedAt: ticket?.queuedAt || v.updatedAt,
@@ -196,12 +212,38 @@ export class ClinicQueueService {
       this.config.queueIssuanceWindows,
     );
     if (!shiftType) throw clinicalForbidden('ROOM_ACCESS_DENIED', 'No active doctor shift.');
-    const schedule = await manager.getRepository(DoctorSchedule).findOne({
-      where: { doctorId, departmentId, shiftDate: new Date(businessDate), shiftType },
+    const schedules = await manager.getRepository(DoctorSchedule).find({
+      where: { departmentId, shiftDate: new Date(businessDate), shiftType },
     });
-    if (!schedule) {
+    if (schedules.length > 1)
+      throw clinicalConflict(
+        'ROOM_SCHEDULE_CONFLICT',
+        'Room has overlapping doctor schedules. Resolve the schedule before examining patients.',
+      );
+    if (schedules.length !== 1 || schedules[0].doctorId !== doctorId) {
       throw clinicalForbidden('ROOM_ACCESS_DENIED', 'Doctor is not assigned to this clinic room.');
     }
+  }
+
+  private async assertRoomAvailable(manager: EntityManager, departmentId: string, visitId: string) {
+    await manager
+      .getRepository(Department)
+      .createQueryBuilder('room')
+      .setLock('pessimistic_write')
+      .where('room.id = :departmentId', { departmentId })
+      .getOne();
+    const occupied = await manager
+      .getRepository(Visit)
+      .createQueryBuilder('visit')
+      .where('visit.current_department_id = :departmentId', { departmentId })
+      .andWhere('visit.status = :status', { status: VisitStatus.IN_EXAMINATION })
+      .andWhere('visit.id <> :visitId', { visitId })
+      .getCount();
+    if (occupied)
+      throw clinicalConflict(
+        'ROOM_BUSY',
+        'Finish the current examination before calling or receiving another patient.',
+      );
   }
 
   async callPatient(id: string, doctorId: string) {
@@ -212,10 +254,17 @@ export class ClinicQueueService {
         throw clinicalConflict('VISIT_STATE_CONFLICT', 'Only a waiting patient can be called.');
       }
       await this.assertDoctorAssignment(doctorId, visit.currentDepartmentId, manager);
+      await this.assertRoomAvailable(manager, visit.currentDepartmentId!, visit.id);
       const ticket = await this.queue.activeTicket(id, QueueTicketKind.CLINIC, manager);
       if (!ticket || ticket.status !== QueueTicketStatus.ACTIVE) {
         throw clinicalConflict('TICKET_EXPIRED', 'Visit has no active clinic ticket.');
       }
+      if (visit.status === VisitStatus.CLINIC_CALLED && visit.currentDoctorId !== doctorId)
+        throw clinicalForbidden(
+          'ROOM_ACCESS_DENIED',
+          'Only the calling doctor may recall this patient.',
+        );
+      if (ticket.callAttempts === 0) visit.returnReportedAt = null;
       ticket.callAttempts += 1;
       ticket.lastCalledAt = new Date();
       const absent = ticket.callAttempts >= MAX_QUEUE_CALL_ATTEMPTS;
@@ -267,10 +316,22 @@ export class ClinicQueueService {
         );
       }
       await this.assertDoctorAssignment(doctorId, visit.currentDepartmentId, manager);
+      await this.assertRoomAvailable(manager, visit.currentDepartmentId!, visit.id);
+      if (visit.currentDoctorId !== doctorId) {
+        throw clinicalForbidden(
+          'ROOM_ACCESS_DENIED',
+          'Only the doctor who called or examined this visit may receive it.',
+        );
+      }
       const ticket = await this.queue.activeTicket(id, QueueTicketKind.CLINIC, manager);
       if (ticket) {
         ticket.status = QueueTicketStatus.COMPLETED;
         await manager.getRepository(QueueTicket).save(ticket);
+      }
+      if (visit.status === VisitStatus.RE_EXAM_CALLING) {
+        await manager
+          .getRepository(VisitStep)
+          .update({ visitId: id, isReExam: true }, { status: StepStatus.IN_PROGRESS });
       }
       visit.status = VisitStatus.IN_EXAMINATION;
       visit.currentDoctorId = doctorId;
@@ -290,10 +351,75 @@ export class ClinicQueueService {
     });
   }
 
+  async reportPatientReturn(id: string, patientId: string) {
+    return this.queue.transaction(async (manager) => {
+      const visit = await this.queue.lockVisit(manager, id);
+      if (visit.patientId !== patientId)
+        throw clinicalForbidden('ROOM_ACCESS_DENIED', 'Patients may only report their own return.');
+      if (visit.status !== VisitStatus.TEMPORARILY_ABSENT)
+        throw clinicalConflict(
+          'VISIT_STATE_CONFLICT',
+          'Only a temporarily absent patient can report returning.',
+        );
+      const ticket = await this.queue.activeTicket(id, QueueTicketKind.CLINIC, manager);
+      if (!ticket || ticket.status !== QueueTicketStatus.PAUSED)
+        throw clinicalConflict('TICKET_EXPIRED', 'A valid paused clinic ticket is required.');
+      if (!visit.returnReportedAt) {
+        visit.returnReportedAt = new Date();
+        await manager.getRepository(Visit).save(visit);
+        const { businessDate, shiftType } = getBusinessTime(
+          new Date(),
+          this.config.queueIssuanceWindows,
+        );
+        const schedule =
+          shiftType && visit.currentDepartmentId
+            ? await manager.getRepository(DoctorSchedule).findOne({
+                where: {
+                  departmentId: visit.currentDepartmentId,
+                  shiftDate: new Date(businessDate),
+                  shiftType,
+                },
+              })
+            : null;
+        const doctorId = schedule?.doctorId || visit.currentDoctorId;
+        if (doctorId)
+          await this.notifications.create(
+            {
+              userId: doctorId,
+              visitId: id,
+              type: 'PATIENT_RETURN_REPORTED',
+              title: 'Người bệnh báo đã quay lại',
+              message:
+                'Số ' +
+                visit.clinicTicketNumber +
+                ' đã báo có mặt tại phòng khám. Vui lòng kiểm tra và xếp lại hàng.',
+              metadata: { returnReportedAt: visit.returnReportedAt },
+            },
+            manager,
+          );
+        await this.audit.log(
+          {
+            action: 'REPORT_PATIENT_RETURN',
+            actorId: patientId,
+            actorRole: Role.PATIENT,
+            targetEntityType: 'Visit',
+            targetEntityId: id,
+            metadata: { returnReportedAt: visit.returnReportedAt },
+          },
+          manager,
+        );
+      }
+      return { visitId: id, status: visit.status, returnReportedAt: visit.returnReportedAt };
+    });
+  }
+
   async requeueVisit(id: string, dto: RequeueVisitDto, actor: { id: string; role: Role }) {
     return this.queue.transaction(async (manager) => {
       await this.queue.expireDueTickets(new Date(), manager);
       const visit = await this.queue.lockVisit(manager, id);
+      if (actor.role === Role.DOCTOR) {
+        await this.assertDoctorAssignment(actor.id, visit.currentDepartmentId, manager);
+      }
       if (visit.status !== VisitStatus.TEMPORARILY_ABSENT) {
         throw clinicalConflict(
           'VISIT_STATE_CONFLICT',
@@ -308,6 +434,7 @@ export class ClinicQueueService {
       ticket.callAttempts = 0;
       ticket.queuedAt = new Date();
       visit.status = VisitStatus.CLINIC_WAITING;
+      visit.returnReportedAt = null;
       await manager.getRepository(QueueTicket).save(ticket);
       await manager.getRepository(Visit).save(visit);
       await this.notifications.create(

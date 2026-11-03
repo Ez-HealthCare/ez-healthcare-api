@@ -59,7 +59,7 @@ export class ParaclinicalController {
     description: 'Forbidden: clinical staff or the attending patient only',
   })
   @ApiResponse({ status: 404, description: 'Result not found' })
-  async getResult(@Param('stepId') stepId: string) {
-    return this.paraclinicalService.getResult(stepId);
+  async getResult(@Param('stepId') stepId: string, @Request() req: any) {
+    return this.paraclinicalService.getResult(stepId, req.user);
   }
 }

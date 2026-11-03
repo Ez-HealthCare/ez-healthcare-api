@@ -57,6 +57,7 @@ export interface VisitPatientSummaryDto {
 }
 
 export interface VisitDossierDto {
+  returnReportedAt?: Date | null;
   visitId: string;
   hallTicketNumber: string;
   clinicTicketNumber?: string;
@@ -111,6 +112,7 @@ export interface StepSummaryDto {
 
 export interface PrescriptionSummaryDto {
   id: string;
+  signedAt?: Date;
   icd10Code?: string;
   icd10Name?: string;
   notes?: string;
@@ -165,11 +167,11 @@ export function toUserFull(user: any): UserFullDto | undefined {
 export function isPatientProfileComplete(user: any): boolean {
   return Boolean(
     user?.name?.trim() &&
-      user.dateOfBirth &&
-      user.gender?.trim() &&
-      user.phone?.trim() &&
-      user.nationalId?.trim() &&
-      user.allergies != null,
+    user.dateOfBirth &&
+    user.gender?.trim() &&
+    user.phone?.trim() &&
+    user.nationalId?.trim() &&
+    user.allergies != null,
   );
 }
 
@@ -224,6 +226,7 @@ export function toPrescriptionSummary(prescription: any): PrescriptionSummaryDto
   if (!prescription) return undefined;
   return {
     id: prescription.id,
+    signedAt: prescription.updatedAt,
     icd10Code: prescription.icd10Code,
     icd10Name: prescription.icd10Name,
     notes: prescription.notes,
@@ -275,6 +278,7 @@ export function toVisitDossier(
     hallTicketNumber: visit.hallTicketNumber,
     clinicTicketNumber: visit.clinicTicketNumber,
     status: visit.status,
+    returnReportedAt: visit.returnReportedAt,
     chiefComplaint: visit.chiefComplaint,
     symptomOnset: visit.symptomOnset,
     symptomDuration: visit.symptomDuration,
@@ -290,7 +294,11 @@ export function toVisitDossier(
     initialDepartment: toDepartmentSummary(visit.initialDepartment),
     currentDepartment: toDepartmentSummary(visit.currentDepartment),
     vital: toVitalSummary(visit.vital),
-    steps: visit.steps?.map(toStepSummary),
+    steps: visit.steps?.map((step: any) => ({
+      ...toStepSummary(step),
+      // Older concluded visits may predate re-exam step synchronization.
+      status: visit.status === 'COMPLETED' && step.isReExam ? 'COMPLETED' : step.status,
+    })),
     prescription: toPrescriptionSummary(prescription),
   };
 }

@@ -55,7 +55,7 @@ export class ReceptionRequestService {
       .orderBy('request.submitted_at', 'ASC');
     if (search?.trim()) {
       query.andWhere(
-        '(patient.name ILIKE :search OR patient.national_id ILIKE :search OR patient.phone ILIKE :search)',
+        '(patient.name ILIKE :search OR patient.nationalId ILIKE :search OR patient.phone ILIKE :search)',
         { search: `%${search.trim()}%` },
       );
     }

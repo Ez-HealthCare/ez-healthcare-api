@@ -7,6 +7,7 @@ import { ShiftType } from '../enums/shift-type.enum';
 
 @Entity('doctor_schedules')
 @Index('idx_doctor_schedule_unique', ['doctorId', 'shiftDate', 'shiftType'], { unique: true })
+@Index('uq_room_shift_doctor', ['departmentId', 'shiftDate', 'shiftType'], { unique: true })
 export class DoctorSchedule extends BaseEntity {
   @Column({ name: 'doctor_id', type: 'uuid' })
   doctorId: string;

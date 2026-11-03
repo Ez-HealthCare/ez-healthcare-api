@@ -32,7 +32,10 @@ export function configureAuthHttp(app: INestApplication, config: ApiConfigServic
       res.setHeader('Cache-Control', 'no-store');
       if (req.method === 'POST') {
         const origin = req.headers.origin;
-        if (origin && !origins.includes(origin)) {
+        // Swagger runs on the API's own origin. Same-origin requests do not
+        // need a CORS grant; cross-origin clients still use the exact allowlist.
+        const sameOrigin = `${req.protocol}://${req.get('host')}`;
+        if (origin && origin !== sameOrigin && !origins.includes(origin)) {
           res.status(403).json({ message: 'Origin is not allowed.' });
           return;
         }

@@ -82,6 +82,9 @@ export class Visit extends BaseEntity {
   @Column({ type: 'boolean', default: false })
   isVerified: boolean;
 
+  @Column({ name: 'return_reported_at', type: 'timestamptz', nullable: true })
+  returnReportedAt?: Date | null;
+
   @Column({ name: 'hall_reissue_count', type: 'int', default: 0 })
   hallReissueCount: number;
 

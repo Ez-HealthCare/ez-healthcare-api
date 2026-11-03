@@ -32,7 +32,8 @@
     "migration:generate": "node --loader ts-node/esm --experimental-specifier-resolution=node ./node_modules/typeorm/cli.js -d ./src/database/data-source.ts migration:generate",
     "migration:run": "node --loader ts-node/esm --experimental-specifier-resolution=node ./node_modules/typeorm/cli.js -d ./src/database/data-source.ts migration:run",
     "migration:revert": "node --loader ts-node/esm --experimental-specifier-resolution=node ./node_modules/typeorm/cli.js -d ./src/database/data-source.ts migration:revert",
-    "migration:show": "node --loader ts-node/esm --experimental-specifier-resolution=node ./node_modules/typeorm/cli.js -d ./src/database/data-source.ts migration:show"
+    "migration:show": "node --loader ts-node/esm --experimental-specifier-resolution=node ./node_modules/typeorm/cli.js -d ./src/database/data-source.ts migration:show",
+    "test:integration": "docker compose -f compose.integration.yml up --build --force-recreate --abort-on-container-exit --exit-code-from integration-tests"
   },
   "dependencies": {
     "@nestjs/common": "^12.1.3",

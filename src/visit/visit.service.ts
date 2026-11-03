@@ -7,7 +7,11 @@ import {
   UnprocessableEntityException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, In, Repository } from 'typeorm';
+import { NotificationService } from '../notification/notification.service';
+import { PatientHistoryQueryDto } from './dto/patient-history-query.dto';
+import { DoctorHistoryQueryDto } from './dto/doctor-history-query.dto';
+import { StepStatus } from './enums/step-status.enum';
 import { AuditService } from '../common/audit.service';
 import { DEPARTMENT_CODES, QUEUE_PRIORITY_DEFAULTS } from '../common/constants/clinical.constants';
 import { DRUG_CLASS_MAP } from '../common/constants/visit.constants';
@@ -84,6 +88,7 @@ export class VisitService {
     private readonly dataSource: DataSource,
     private readonly audit: AuditService,
     private readonly config: ApiConfigService,
+    private readonly notifications: NotificationService,
   ) {}
 
   private async assertDoctorAssignment(doctorId: string, departmentId?: string) {
@@ -148,6 +153,138 @@ export class VisitService {
         alert: '🚨 STAT EMERGENCY DISPATCH TRIGGERED!',
       };
     });
+  }
+
+  async getDoctorHistory(doctorId: string, query: DoctorHistoryQueryDto) {
+    const builder = this.prescriptions
+      .createQueryBuilder('prescription')
+      .innerJoinAndSelect('prescription.visit', 'visit')
+      .innerJoinAndSelect('visit.patient', 'patient')
+      .leftJoinAndSelect('visit.currentDepartment', 'department')
+      .select([
+        'prescription.id',
+        'prescription.visitId',
+        'prescription.updatedAt',
+        'prescription.icd10Code',
+        'prescription.icd10Name',
+        'visit.id',
+        'visit.hallTicketNumber',
+        'visit.clinicTicketNumber',
+        'visit.status',
+        'visit.createdAt',
+        'patient.id',
+        'patient.name',
+        'department.id',
+        'department.code',
+        'department.name',
+      ])
+      .where('prescription.doctor_id = :doctorId', { doctorId })
+      .andWhere('visit.status = :status', { status: VisitStatus.COMPLETED });
+    if (query.completedDate) {
+      const start = new Date(`${query.completedDate}T00:00:00+07:00`);
+      const end = new Date(start.getTime() + 86_400_000);
+      builder.andWhere('prescription.updated_at >= :start AND prescription.updated_at < :end', {
+        start,
+        end,
+      });
+    }
+    if (query.search?.trim()) {
+      const search = `%${query.search.trim().replace(/[!%_]/g, '!$&')}%`;
+      builder.andWhere(
+        "(patient.name ILIKE :search ESCAPE '!' OR visit.clinicTicketNumber ILIKE :search ESCAPE '!' OR visit.hallTicketNumber ILIKE :search ESCAPE '!')",
+        { search },
+      );
+    }
+    const [items, total] = await builder
+      .orderBy('prescription.updatedAt', 'DESC')
+      .addOrderBy('prescription.id', 'DESC')
+      .skip((query.page - 1) * query.pageSize)
+      .take(query.pageSize)
+      .getManyAndCount();
+    return {
+      total,
+      page: query.page,
+      pageSize: query.pageSize,
+      items: items.map((item) => ({
+        visitId: item.visitId,
+        patientName: item.visit.patient.name,
+        createdAt: item.visit.createdAt,
+        completedAt: item.updatedAt,
+        hallTicketNumber: item.visit.hallTicketNumber,
+        clinicTicketNumber: item.visit.clinicTicketNumber,
+        room: item.visit.currentDepartment
+          ? { code: item.visit.currentDepartment.code, name: item.visit.currentDepartment.name }
+          : null,
+        icd10Code: item.icd10Code,
+        icd10Name: item.icd10Name,
+      })),
+    };
+  }
+
+  async getDoctorHistoryDetail(id: string, doctorId: string) {
+    const prescription = await this.prescriptions.findOne({
+      where: { visitId: id, doctorId },
+      relations: { items: true, doctor: true },
+    });
+    if (!prescription) throw new NotFoundException('Completed visit record not found.');
+    const visit = await this.visits.findOne({
+      where: { id, status: VisitStatus.COMPLETED },
+      relations: {
+        patient: true,
+        currentDoctor: true,
+        currentDepartment: true,
+        vital: true,
+        steps: { department: true },
+      },
+    });
+    if (!visit) throw new NotFoundException('Completed visit record not found.');
+    return toVisitDossier(visit, prescription, false);
+  }
+
+  async getPatientHistory(patientId: string, query: PatientHistoryQueryDto) {
+    const [visits, total] = await this.visits.findAndCount({
+      where: { patientId, ...(query.status ? { status: query.status } : {}) },
+      relations: { currentDepartment: true, currentDoctor: true },
+      order: { createdAt: 'DESC', id: 'DESC' },
+      skip: (query.page - 1) * query.pageSize,
+      take: query.pageSize,
+    });
+    const prescriptions = visits.length
+      ? await this.prescriptions.find({
+          where: { visitId: In(visits.map((visit) => visit.id)) },
+        })
+      : [];
+    const byVisit = new Map(prescriptions.map((item) => [item.visitId, item]));
+    return {
+      page: query.page,
+      pageSize: query.pageSize,
+      total,
+      items: visits.map((visit) => {
+        const prescription = byVisit.get(visit.id);
+        return {
+          visitId: visit.id,
+          createdAt: visit.createdAt,
+          updatedAt: visit.updatedAt,
+          hallTicketNumber: visit.hallTicketNumber,
+          clinicTicketNumber: visit.clinicTicketNumber,
+          status: visit.status,
+          chiefComplaint: visit.chiefComplaint,
+          room: visit.currentDepartment
+            ? { code: visit.currentDepartment.code, name: visit.currentDepartment.name }
+            : null,
+          doctor: visit.currentDoctor
+            ? { id: visit.currentDoctor.id, name: visit.currentDoctor.name }
+            : null,
+          conclusion: prescription
+            ? {
+                icd10Code: prescription.icd10Code,
+                icd10Name: prescription.icd10Name,
+                signedAt: prescription.updatedAt,
+              }
+            : null,
+        };
+      }),
+    };
   }
 
   async concludeVisit(id: string, dto: ConcludeVisitDto, doctorId: string) {
@@ -217,6 +354,20 @@ export class VisitService {
       }
       visit.status = VisitStatus.COMPLETED;
       await manager.getRepository(Visit).save(visit);
+      await manager
+        .getRepository(VisitStep)
+        .update({ visitId: id, isReExam: true }, { status: StepStatus.COMPLETED });
+      await this.notifications.create(
+        {
+          userId: visit.patientId,
+          visitId: id,
+          type: 'VISIT_COMPLETED',
+          title: 'Đã hoàn tất khám',
+          message:
+            'Bác sĩ đã lưu kết luận và đơn thuốc. Mở hồ sơ khám bệnh để xem lại lời dặn và lịch tái khám.',
+        },
+        manager,
+      );
       await this.audit.log(
         {
           action: 'CONCLUDE_VISIT',
@@ -325,7 +476,7 @@ export class VisitService {
   async evaluateParaclinicalCompletion(visitId: string, remainingPendingSteps: number) {
     const visit = await this.visits.findOne({ where: { id: visitId } });
     if (!visit) throw new NotFoundException('Visit not found');
-    if (remainingPendingSteps === 0) {
+    if (remainingPendingSteps === 0 && visit.status === VisitStatus.PARACLINICAL_PENDING) {
       visit.status = VisitStatus.RE_EXAM_CALLING;
       visit.isPriority = true;
       visit.priorityReason = 'Priority Recall: All diagnostic results completed';
