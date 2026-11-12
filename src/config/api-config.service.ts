@@ -92,7 +92,9 @@ export class ApiConfigService {
       BUSINESS_WINDOWS.map((window) => `${window.start}-${window.end}`).join(','),
     );
     const windows = raw.split(',').map((entry) => {
-      const match = /^([01]\d|2[0-3]):([0-5]\d)-(?:([01]\d|2[0-3]):([0-5]\d)|(24):00)$/.exec(entry.trim());
+      const match = /^([01]\d|2[0-3]):([0-5]\d)-(?:([01]\d|2[0-3]):([0-5]\d)|(24):00)$/.exec(
+        entry.trim(),
+      );
       const start = match ? `${match[1]}:${match[2]}` : '';
       const end = match ? (match[5] ? '24:00' : `${match[3]}:${match[4]}`) : '';
       if (!match || start >= end) {
@@ -109,6 +111,22 @@ export class ApiConfigService {
     return windows;
   }
 
+  get receptionEta() {
+    if (!this.boolean('RECEPTION_ETA_ENABLED')) return undefined;
+    return {
+      counterCount: this.portNumber('RECEPTION_ETA_COUNTERS', 2),
+      serviceMinutes: this.portNumber('RECEPTION_ETA_SERVICE_MINUTES', 5),
+    };
+  }
+
+  get downstreamEta() {
+    if (!this.boolean('DOWNSTREAM_ETA_ENABLED')) return undefined;
+    return {
+      triageCounters: this.portNumber('TRIAGE_ETA_COUNTERS', 2),
+      triageMinutes: this.portNumber('TRIAGE_ETA_SERVICE_MINUTES', 7),
+    };
+  }
+
   // Called by ApiConfigModule before consumers (JWT/database) are constructed.
   validate(): void {
     void this.port;
@@ -117,6 +135,8 @@ export class ApiConfigService {
     void this.corsOrigins;
     void this.otpDelivery;
     void this.queueIssuanceWindows;
+    void this.receptionEta;
+    void this.downstreamEta;
   }
 
   private value(key: string, fallback = ''): string {

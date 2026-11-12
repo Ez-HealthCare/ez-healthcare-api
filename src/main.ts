@@ -1,6 +1,7 @@
 import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
+import { ReceptionRealtimeService } from './visit/reception-realtime.service';
 import { configureAuthHttp } from './auth/configure-auth-http';
 import { API_PREFIX, SWAGGER_PATH } from './common/constants/app.constants';
 import { ApiConfigService } from './config/api-config.service';
@@ -10,6 +11,9 @@ async function bootstrap() {
 
   const apiConfig = app.get(ApiConfigService);
   configureAuthHttp(app, apiConfig);
+  const receptionRealtime = app.get(ReceptionRealtimeService);
+  receptionRealtime.attach(app.getHttpServer(), apiConfig.corsOrigins);
+  app.use(receptionRealtime.afterMutation);
 
   // Swagger Documentation
   const config = new DocumentBuilder()

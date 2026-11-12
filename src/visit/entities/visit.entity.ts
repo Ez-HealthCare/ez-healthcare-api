@@ -91,6 +91,18 @@ export class Visit extends BaseEntity {
   @Column({ name: 'intake_completed_at', type: 'timestamptz', nullable: true })
   intakeCompletedAt?: Date;
 
+  @Column({ name: 'triage_arrived_at', type: 'timestamptz', nullable: true })
+  triageArrivedAt?: Date | null;
+
+  @Column({ name: 'triage_started_at', type: 'timestamptz', nullable: true })
+  triageStartedAt?: Date | null;
+
+  @Column({ name: 'clinic_arrived_at', type: 'timestamptz', nullable: true })
+  clinicArrivedAt?: Date | null;
+
+  @Column({ name: 'clinic_started_at', type: 'timestamptz', nullable: true })
+  clinicStartedAt?: Date | null;
+
   @OneToOne('VisitVital', (vital: any) => vital.visit)
   vital?: VisitVital;
 

@@ -33,6 +33,7 @@ import { Roles } from '../auth/decorators/roles.decorator';
 import { Role } from '../user/enums/role.enum';
 import { QueueTicketService } from './queue-ticket.service';
 import { ReceptionService } from './reception.service';
+import { ReceptionRealtimeService } from './reception-realtime.service';
 import { ClinicQueueService } from './clinic-queue.service';
 
 @ApiTags('Outpatient Clinical Visits')
@@ -44,6 +45,7 @@ export class VisitController {
     private readonly receptionService: ReceptionService,
     private readonly clinicQueueService: ClinicQueueService,
     private readonly triageDagService: TriageDagService,
+    private readonly receptionRealtime: ReceptionRealtimeService,
   ) {}
 
   @Post('hall-ticket')
@@ -75,6 +77,33 @@ export class VisitController {
     @Headers('idempotency-key') idempotencyKey?: string,
   ) {
     return this.queueTicketService.createWalkInTicket(dto, req.user, idempotencyKey);
+  }
+
+  @Post('me/reception-live')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.PATIENT, Role.NURSE, Role.ADMIN, Role.DOCTOR)
+  issueReceptionLiveGrant(@Request() req: { user: { role: Role } }) {
+    return this.receptionRealtime.issueGrant(req.user.role);
+  }
+
+  @Post(':id/station-arrival/:station')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.PATIENT)
+  confirmStageArrival(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('station') station: string,
+    @Query('ticketNumber') ticketNumber: string | undefined,
+    @Request() req: { user: { id: string } },
+  ) {
+    return this.receptionService.confirmStageArrival(id, req.user.id, station, ticketNumber);
+  }
+
+  @Post(':id/triage/start')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.NURSE, Role.ADMIN)
+  startTriage(@Param('id', new ParseUUIDPipe()) id: string) {
+    return this.receptionService.startTriage(id);
   }
 
   @Get('me/current')

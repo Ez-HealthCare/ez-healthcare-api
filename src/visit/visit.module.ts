@@ -17,6 +17,7 @@ import { QueueTicket } from './entities/queue-ticket.entity';
 import { NotificationModule } from '../notification/notification.module';
 import { QueueTicketService } from './queue-ticket.service';
 import { ReceptionService } from './reception.service';
+import { ReceptionRealtimeService } from './reception-realtime.service';
 import { ClinicQueueService } from './clinic-queue.service';
 import { Appointment } from '../appointment/entities/appointment.entity';
 import { AppointmentService } from '../appointment/appointment.service';
@@ -46,6 +47,7 @@ import { AppointmentController } from '../appointment/appointment.controller';
     VisitService,
     QueueTicketService,
     ReceptionService,
+    ReceptionRealtimeService,
     ClinicQueueService,
     AppointmentService,
   ],

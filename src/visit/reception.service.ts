@@ -1,10 +1,11 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { In, Not, IsNull, Repository } from 'typeorm';
 import { AuditService } from '../common/audit.service';
 import {
   ELDERLY_PRIORITY_AGE,
   MAX_PATIENT_HALL_REISSUES,
+  VN_OFFSET_MS,
 } from '../common/constants/clinical.constants';
 import { ApiConfigService } from '../config/api-config.service';
 import { User } from '../database/entities/user.entity';
@@ -31,6 +32,7 @@ import {
 import { VisitStatus } from './enums/visit-status.enum';
 import { calculateNews2 } from './news2-calculator';
 import { QueueTicketService } from './queue-ticket.service';
+import { estimateReceptionStart } from './reception-eta';
 import { assertTransition } from './visit-state-machine';
 
 type Actor = { id: string; role: Role };
@@ -108,8 +110,16 @@ export class ReceptionService {
       .getOne();
     if (!ticket) return null;
     const visit = ticket.visit;
+    const [receptionEta, stageEta] = await Promise.all([
+      this.getReceptionEta(ticket),
+      ticket.status === QueueTicketStatus.EXPIRED
+        ? undefined
+        : this.getStageEta(visit, ticket.businessDate),
+    ]);
     return {
       visitId: visit.id,
+      ...(receptionEta && { receptionEta }),
+      ...(stageEta && { stageEta }),
       hallTicketNumber: visit.hallTicketNumber,
       clinicTicketNumber: visit.clinicTicketNumber,
       status: visit.status,
@@ -131,6 +141,218 @@ export class ReceptionService {
       expiresAt: ticket.expiresAt,
       intakeCompleted: !!visit.intakeCompletedAt,
     };
+  }
+
+  async confirmStageArrival(id: string, patientId: string, station: string, ticketNumber?: string) {
+    if (!this.config.downstreamEta) throw new NotFoundException();
+    return this.queue.transaction(async (manager) => {
+      const visit = await this.queue.lockVisit(manager, id);
+      if (visit.patientId !== patientId) throw new NotFoundException();
+      const expected =
+        station === 'triage' ? VisitStatus.TRIAGE_PENDING : VisitStatus.CLINIC_WAITING;
+      if (!['triage', 'clinic'].includes(station) || visit.status !== expected) {
+        throw clinicalConflict(
+          'VISIT_STATE_CONFLICT',
+          'The visit is no longer waiting at this station.',
+        );
+      }
+      if (station === 'triage') {
+        visit.triageArrivedAt ??= new Date();
+      } else {
+        const ticket = await this.queue.activeTicket(id, QueueTicketKind.CLINIC, manager);
+        if (
+          !ticket ||
+          ticket.status !== QueueTicketStatus.ACTIVE ||
+          ticket.displayNumber !== ticketNumber ||
+          ticket.expiresAt <= new Date()
+        ) {
+          throw clinicalConflict('TICKET_EXPIRED', 'The clinic ticket is no longer active.');
+        }
+        visit.clinicArrivedAt ??= new Date();
+      }
+      await manager.getRepository(Visit).save(visit);
+      return { arrived: true };
+    });
+  }
+
+  async startTriage(id: string) {
+    if (!this.config.downstreamEta) throw new NotFoundException();
+    return this.queue.transaction(async (manager) => {
+      const visit = await this.queue.lockVisit(manager, id);
+      if (visit.status !== VisitStatus.TRIAGE_PENDING || visit.intakeCompletedAt) {
+        throw clinicalConflict(
+          'VISIT_STATE_CONFLICT',
+          'The visit is no longer waiting for triage.',
+        );
+      }
+      visit.triageStartedAt ??= new Date();
+      visit.triageArrivedAt ??= visit.triageStartedAt;
+      await manager.getRepository(Visit).save(visit);
+      return { started: true };
+    });
+  }
+
+  private async getStageEta(visit: Visit, businessDate: string) {
+    const settings = this.config.downstreamEta;
+    if (!settings) return undefined;
+    const triage = visit.status === VisitStatus.TRIAGE_PENDING && !visit.intakeCompletedAt;
+    const clinic = visit.status === VisitStatus.CLINIC_WAITING && !!visit.currentDepartmentId;
+    if (!triage && !clinic) return undefined;
+    const station = triage ? 'triage' : 'clinic';
+    const readyAt = triage ? visit.triageArrivedAt : visit.clinicArrivedAt;
+    const now = new Date();
+    const status =
+      triage && visit.triageStartedAt ? 'in-service' : readyAt ? 'waiting' : 'travelling';
+    const result = { station, status, estimatedStartAt: null as Date | null, calculatedAt: now };
+    if (status !== 'waiting') return result;
+
+    const localTime = new Date(now.getTime() + VN_OFFSET_MS).toISOString();
+    const localClock = localTime.slice(11, 16);
+    const windows = this.config.queueIssuanceWindows;
+    const window = windows.find(({ start, end }) => localClock >= start && localClock < end);
+    if (!window || localTime.slice(0, 10) !== businessDate) return result;
+    const midnight = Date.parse(businessDate + 'T00:00:00Z') - VN_OFFSET_MS;
+    const [hours, minutes] = window.end.split(':').map(Number);
+    const closesAt = new Date(midnight + (hours * 60 + minutes) * 60_000);
+    const dayEnd = midnight + 86_400_000;
+    const today = (date?: Date | null) =>
+      !!date && date.getTime() >= midnight && date.getTime() < dayEnd;
+    let starts: (Date | undefined)[];
+    let waiting: Visit[];
+    let counters = settings.triageCounters;
+    let duration = settings.triageMinutes;
+    const arrivedAt = (row: Visit) => (triage ? row.triageArrivedAt : row.clinicArrivedAt);
+    if (triage) {
+      const rows = await this.visits.find({
+        where: {
+          status: VisitStatus.TRIAGE_PENDING,
+          intakeCompletedAt: IsNull(),
+          triageArrivedAt: Not(IsNull()),
+        },
+      });
+      starts = rows.filter((row) => today(row.triageStartedAt)).map((row) => row.triageStartedAt!);
+      waiting = rows.filter((row) => !row.triageStartedAt && today(row.triageArrivedAt));
+    } else {
+      const { shiftType } = getBusinessTime(now, windows);
+      const schedule =
+        shiftType &&
+        (await this.visits.manager.getRepository(DoctorSchedule).findOne({
+          where: {
+            departmentId: visit.currentDepartmentId,
+            shiftDate: new Date(businessDate),
+            shiftType,
+          },
+          relations: { doctor: true, department: true },
+        }));
+      if (!schedule || !schedule.doctor?.isActive || !schedule.department?.isActive) return result;
+      const roomTickets = await this.tickets.find({
+        where: {
+          businessDate,
+          kind: QueueTicketKind.CLINIC,
+          scopeKey: schedule.department.code,
+          status: QueueTicketStatus.ACTIVE,
+        },
+        relations: { visit: true },
+      });
+      waiting = roomTickets
+        .map((ticket) => ticket.visit)
+        .filter((row) => row.status === VisitStatus.CLINIC_WAITING && today(row.clinicArrivedAt));
+      const inExam = await this.visits.find({
+        where: {
+          currentDepartmentId: visit.currentDepartmentId,
+          status: VisitStatus.IN_EXAMINATION,
+        },
+      });
+      starts = [
+        ...inExam
+          .filter((row) => row.currentDoctorId === schedule.doctorId)
+          .map((row) => row.clinicStartedAt ?? undefined),
+        ...roomTickets
+          .filter((ticket) => ticket.visit.status === VisitStatus.CLINIC_CALLED)
+          .map((ticket) => ticket.lastCalledAt),
+      ];
+      counters = 1;
+      duration = schedule.slotDurationMin;
+    }
+
+    waiting.sort(
+      (a, b) =>
+        Number(b.isPriority) - Number(a.isPriority) ||
+        arrivedAt(a)!.getTime() - arrivedAt(b)!.getTime() ||
+        a.id.localeCompare(b.id),
+    );
+    const ahead = waiting.findIndex((row) => row.id === visit.id);
+    if (ahead >= 0 && duration > 0) {
+      result.estimatedStartAt = estimateReceptionStart(
+        now,
+        closesAt,
+        counters,
+        duration,
+        ahead,
+        starts,
+      );
+    }
+    return result;
+  }
+
+  private async getReceptionEta(ticket: QueueTicket) {
+    const settings = this.config.receptionEta;
+    if (
+      !settings ||
+      ticket.kind !== QueueTicketKind.HALL ||
+      ticket.status !== QueueTicketStatus.ACTIVE ||
+      ticket.visit.status !== VisitStatus.HALL_WAITING
+    ) {
+      return undefined;
+    }
+
+    const hall = await this.tickets
+      .createQueryBuilder('ticket')
+      .innerJoin('ticket.visit', 'visit')
+      .where('ticket.kind = :kind', { kind: QueueTicketKind.HALL })
+      .andWhere('ticket.business_date = :businessDate', { businessDate: ticket.businessDate })
+      .andWhere('ticket.status IN (:...statuses)', {
+        statuses: [QueueTicketStatus.ACTIVE, QueueTicketStatus.CALLED],
+      })
+      .andWhere('visit.status = :visitStatus', { visitStatus: VisitStatus.HALL_WAITING })
+      .orderBy('visit."isPriority"', 'DESC')
+      .addOrderBy('ticket.queued_at', 'ASC')
+      .addOrderBy('ticket.sequence', 'ASC')
+      .getMany();
+
+    const waitingAhead = hall
+      .filter((entry) => entry.status === QueueTicketStatus.ACTIVE)
+      .findIndex((entry) => entry.id === ticket.id);
+    if (waitingAhead < 0) return undefined;
+
+    const now = new Date();
+    const localTime = new Date(now.getTime() + VN_OFFSET_MS).toISOString();
+    const localClock = localTime.slice(11, 16);
+    const window = this.config.queueIssuanceWindows.find(
+      ({ start, end }) => localClock >= start && localClock < end,
+    );
+
+    let estimatedStartAt: Date | null = null;
+    if (window && localTime.slice(0, 10) === ticket.businessDate) {
+      const [hours, minutes] = window.end.split(':').map(Number);
+      const closesAt = new Date(
+        Date.parse(ticket.businessDate + 'T00:00:00Z') -
+          VN_OFFSET_MS +
+          (hours * 60 + minutes) * 60_000,
+      );
+      estimatedStartAt = estimateReceptionStart(
+        now,
+        closesAt,
+        settings.counterCount,
+        settings.serviceMinutes,
+        waitingAhead,
+        hall
+          .filter((entry) => entry.status === QueueTicketStatus.CALLED)
+          .map((entry) => entry.lastCalledAt),
+      );
+    }
+
+    return { estimatedStartAt, calculatedAt: now };
   }
 
   async getReceptionQueue() {
@@ -232,7 +454,19 @@ export class ReceptionService {
       relations: { patient: true, vital: true, currentDepartment: true },
       order: { isPriority: 'DESC', createdAt: 'ASC' },
     });
-    return visits.map((visit) => this.queueVisit(visit));
+    return visits.map((visit) => ({
+      ...this.queueVisit(visit),
+      triageArrival:
+        this.config.downstreamEta && !visit.intakeCompletedAt
+          ? visit.triageStartedAt
+            ? 'in-service'
+            : visit.triageArrivedAt
+              ? 'waiting'
+              : 'travelling'
+          : undefined,
+      canStartTriage:
+        !!this.config.downstreamEta && !visit.triageStartedAt && !visit.intakeCompletedAt,
+    }));
   }
 
   async getExpiredReceptionQueue(businessDate?: string) {
@@ -311,6 +545,7 @@ export class ReceptionService {
       .andWhere('visit.status = :visitStatus', { visitStatus: VisitStatus.HALL_WAITING })
       .orderBy('visit."isPriority"', 'DESC')
       .addOrderBy('ticket.queued_at', 'ASC')
+      .addOrderBy('ticket.sequence', 'ASC')
       .getOne();
     if (!next) throw new NotFoundException('No patient is waiting at reception.');
     return this.callHallTicket(next.visitId, actor);

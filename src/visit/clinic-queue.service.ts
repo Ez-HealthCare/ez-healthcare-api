@@ -105,6 +105,9 @@ export class ClinicQueueService {
         isPriority: ticket.visit.isPriority,
         priorityReason: ticket.visit.priorityReason,
         queuedAt: ticket.queuedAt,
+        clinicArrivedAt: this.config.downstreamEta
+          ? (ticket.visit.clinicArrivedAt ?? null)
+          : undefined,
         callAttempts: ticket.callAttempts,
         vitals: ticket.visit.vital
           ? {
@@ -334,6 +337,8 @@ export class ClinicQueueService {
           .update({ visitId: id, isReExam: true }, { status: StepStatus.IN_PROGRESS });
       }
       visit.status = VisitStatus.IN_EXAMINATION;
+      visit.clinicStartedAt = new Date();
+      visit.clinicArrivedAt ??= visit.clinicStartedAt;
       visit.currentDoctorId = doctorId;
       await manager.getRepository(Visit).save(visit);
       await this.audit.log(
@@ -434,6 +439,8 @@ export class ClinicQueueService {
       ticket.callAttempts = 0;
       ticket.queuedAt = new Date();
       visit.status = VisitStatus.CLINIC_WAITING;
+      visit.clinicArrivedAt = null;
+      visit.clinicStartedAt = null;
       visit.returnReportedAt = null;
       await manager.getRepository(QueueTicket).save(ticket);
       await manager.getRepository(Visit).save(visit);
@@ -531,6 +538,8 @@ export class ClinicQueueService {
           currentDoctorId: undefined,
           clinicTicketNumber: displayNumber,
           status: VisitStatus.CLINIC_WAITING,
+          clinicArrivedAt: null,
+          clinicStartedAt: null,
           isPriority: true,
           priorityReason: `Transferred: ${dto.transferReason}`,
         });

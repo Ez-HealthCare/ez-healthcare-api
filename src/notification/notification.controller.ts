@@ -1,7 +1,8 @@
-import { Controller, Get, Param, Patch, Request, UseGuards } from '@nestjs/common';
+import { Controller, Get, Param, Patch, Query, Request, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { NotificationService } from './notification.service';
+import { NotificationPageQueryDto } from './dto/notification-page-query.dto';
 
 @ApiTags('Notifications')
 @ApiBearerAuth()
@@ -18,6 +19,11 @@ export class NotificationController {
   @Patch('read-all')
   markAllRead(@Request() req: any) {
     return this.notifications.markAllRead(req.user.id);
+  }
+
+  @Get('page')
+  page(@Request() req: any, @Query() query: NotificationPageQueryDto) {
+    return this.notifications.page(req.user.id, query);
   }
 
   @Patch(':id/read')
