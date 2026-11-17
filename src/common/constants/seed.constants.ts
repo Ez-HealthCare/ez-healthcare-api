@@ -72,6 +72,17 @@ export const SEED_USERS = [
     phone: '0912345678',
   },
   {
+    email: 'voanthaiwork@gmail.com',
+    passwordRaw: 'Patient@123456',
+    name: 'Vo An Thai (Test Patient)',
+    role: Role.PATIENT,
+    nationalId: '079088888888',
+    insuranceCardNumber: 'DN4790888888888',
+    gender: 'MALE',
+    dateOfBirth: new Date('1998-05-15'),
+    phone: '0987654321',
+  },
+  {
     email: 'patient.david@example.com',
     passwordRaw: 'Patient@123456',
     name: 'David Miller',
