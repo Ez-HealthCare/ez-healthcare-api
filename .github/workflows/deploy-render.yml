@@ -54,8 +54,8 @@ jobs:
       - name: Request Render deployment of the checked commit
         env:
           RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
-          DEPLOY_SHA: ${{ steps.checkout.outputs.commit }}
         run: |
+          DEPLOY_SHA=$(git rev-parse HEAD)
           status=$(curl --silent --show-error --max-time 60 \
             --output /dev/null --write-out '%{http_code}' \
             --get --data-urlencode "ref=$DEPLOY_SHA" \
