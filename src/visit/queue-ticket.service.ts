@@ -1,3 +1,4 @@
+import { refreshReceptionEtaHistory } from './reception-eta-history';
 import { createHash } from 'crypto';
 import {
   BadRequestException,
@@ -8,11 +9,11 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, In, Repository } from 'typeorm';
 import { AuditService } from '../common/audit.service';
-import { MAX_PATIENT_HALL_REISSUES } from '../common/constants/clinical.constants';
 import { ApiConfigService } from '../config/api-config.service';
 import { User } from '../database/entities/user.entity';
 import { NotificationService } from '../notification/notification.service';
 import { Role } from '../user/enums/role.enum';
+import { ageOnDate } from './hall-priority';
 import { getBusinessTime } from './business-time';
 import { clinicalConflict } from './clinical-error';
 import { CreateHallTicketDto, CreateWalkInTicketDto } from './dto/create-hall-ticket.dto';
@@ -89,7 +90,11 @@ export class QueueTicketService {
     const result = await repo
       .createQueryBuilder()
       .update(QueueTicket)
-      .set({ status: QueueTicketStatus.EXPIRED })
+      .set({
+        status: QueueTicketStatus.EXPIRED,
+        receptionReleasedAt: () =>
+          "CASE WHEN kind = 'HALL' AND status = 'CALLED' AND reception_desk_code IS NOT NULL THEN expires_at ELSE reception_released_at END",
+      })
       .where('status IN (:...statuses)', {
         statuses: [QueueTicketStatus.ACTIVE, QueueTicketStatus.CALLED, QueueTicketStatus.PAUSED],
       })
@@ -137,7 +142,15 @@ export class QueueTicketService {
       where: {
         visitId,
         kind,
-        status: In([QueueTicketStatus.ACTIVE, QueueTicketStatus.PAUSED, QueueTicketStatus.EXPIRED]),
+        ...(kind === QueueTicketKind.HALL
+          ? {}
+          : {
+              status: In([
+                QueueTicketStatus.ACTIVE,
+                QueueTicketStatus.PAUSED,
+                QueueTicketStatus.EXPIRED,
+              ]),
+            }),
       },
       order: { createdAt: 'DESC' },
     });
@@ -290,11 +303,15 @@ export class QueueTicketService {
     action: (manager: EntityManager) => Promise<T>,
   ): Promise<T | ReturnType<QueueTicketService['ticketResponse']>> {
     const operation = QueueTicketOperation.HALL_APPOINTMENT_CHECK_IN;
-    return this.runIdempotent(idempotencyKey, {
-      actor,
-      operation,
-      fingerprint: this.fingerprint({ actorId: actor.id, appointmentId, operation }),
-    }, action);
+    return this.runIdempotent(
+      idempotencyKey,
+      {
+        actor,
+        operation,
+        fingerprint: this.fingerprint({ actorId: actor.id, appointmentId, operation }),
+      },
+      action,
+    );
   }
 
   async replayAppointmentCheckIn(
@@ -383,6 +400,7 @@ export class QueueTicketService {
       },
       manager,
     );
+    await refreshReceptionEtaHistory(manager, this.config);
     return { visit, ticket };
   }
 
@@ -414,7 +432,7 @@ export class QueueTicketService {
         .where('visit.patient_id = :patientId', { patientId: actor.id })
         .andWhere('ticket.business_date = :businessDate', { businessDate })
         .andWhere('ticket.status IN (:...statuses)', {
-          statuses: [QueueTicketStatus.ACTIVE, QueueTicketStatus.PAUSED],
+          statuses: [QueueTicketStatus.ACTIVE, QueueTicketStatus.CALLED, QueueTicketStatus.PAUSED],
         })
         .getOne();
       if (existing) {
@@ -430,12 +448,20 @@ export class QueueTicketService {
         businessDate,
       );
       const displayNumber = this.displayNumber(QueueTicketKind.HALL, 'FACILITY', sequence);
+      const priorityReason =
+        patient.gender === 'FEMALE' && patient.isPregnant
+          ? 'Mang thai'
+          : (ageOnDate(patient.dateOfBirth, businessDate) ?? -1) >= 60
+            ? 'Từ 60 tuổi'
+            : undefined;
       const visitRepo = manager.getRepository(Visit);
       const visit = await visitRepo.save(
         visitRepo.create({
           patientId: actor.id,
           hallTicketNumber: displayNumber,
           status: VisitStatus.HALL_WAITING,
+          isPriority: !!priorityReason,
+          priorityReason,
         }),
       );
       const ticketRepo = manager.getRepository(QueueTicket);
@@ -477,15 +503,12 @@ export class QueueTicketService {
         },
         manager,
       );
+      await refreshReceptionEtaHistory(manager, this.config);
       return this.ticketResponse(visit, ticket);
     });
   }
 
-  async createWalkInTicket(
-    dto: CreateWalkInTicketDto,
-    actor: Actor,
-    idempotencyHeader?: string,
-  ) {
+  async createWalkInTicket(dto: CreateWalkInTicketDto, actor: Actor, idempotencyHeader?: string) {
     if (actor.role !== Role.RECEPTIONIST) {
       throw new ForbiddenException('Only receptionists may create a walk-in ticket.');
     }
@@ -511,13 +534,21 @@ export class QueueTicketService {
         .where('visit.patient_id = :patientId', { patientId: dto.patientId })
         .andWhere('ticket.business_date = :businessDate', { businessDate })
         .andWhere('ticket.status IN (:...statuses)', {
-          statuses: [QueueTicketStatus.ACTIVE, QueueTicketStatus.PAUSED],
+          statuses: [QueueTicketStatus.ACTIVE, QueueTicketStatus.CALLED, QueueTicketStatus.PAUSED],
         })
         .getOne();
       if (existing) {
-        throw clinicalConflict('VISIT_STATE_CONFLICT', 'Patient already has an active visit today.');
+        throw clinicalConflict(
+          'VISIT_STATE_CONFLICT',
+          'Patient already has an active visit today.',
+        );
       }
-      const sequence = await this.nextSequence(manager, QueueTicketKind.HALL, 'FACILITY', businessDate);
+      const sequence = await this.nextSequence(
+        manager,
+        QueueTicketKind.HALL,
+        'FACILITY',
+        businessDate,
+      );
       const displayNumber = this.displayNumber(QueueTicketKind.HALL, 'FACILITY', sequence);
       const visit = await manager.getRepository(Visit).save(
         manager.getRepository(Visit).create({
@@ -565,11 +596,13 @@ export class QueueTicketService {
         },
         manager,
       );
+      await refreshReceptionEtaHistory(manager, this.config);
       return this.ticketResponse(visit, ticket);
     });
   }
 
   async reissueTicket(id: string, dto: ReissueTicketDto, actor: Actor, idempotencyHeader?: string) {
+    if (![Role.NURSE, Role.RECEPTIONIST].includes(actor.role)) throw new ForbiddenException();
     const idempotencyKey = this.requireIdempotencyKey(idempotencyHeader);
     const { businessDate, expiresAt } = this.requireIssuanceWindow();
     const operation =
@@ -590,20 +623,14 @@ export class QueueTicketService {
     };
     const replay = await this.replay(idempotencyKey, identity);
     if (replay) return replay;
-    const expectedTicket =
-      actor.role === Role.PATIENT
-        ? await this.activeTicket(id, dto.kind)
-        : await this.latestReplaceableTicket(id, dto.kind);
+    const expectedTicket = await this.latestReplaceableTicket(id, dto.kind);
     if (!expectedTicket) {
       throw clinicalConflict('TICKET_EXPIRED', 'No current or expired ticket to replace.');
     }
 
     return this.runIdempotent(idempotencyKey, identity, async (manager) => {
       const visit = await this.lockVisit(manager, id);
-      const patientSelfService = actor.role === Role.PATIENT;
-      const oldTicket = patientSelfService
-        ? await this.activeTicket(id, dto.kind, manager)
-        : await this.latestReplaceableTicket(id, dto.kind, manager);
+      const oldTicket = await this.latestReplaceableTicket(id, dto.kind, manager);
       if (!oldTicket)
         throw clinicalConflict('TICKET_EXPIRED', 'No current or expired ticket to replace.');
       if (oldTicket.id !== expectedTicket.id) {
@@ -612,16 +639,7 @@ export class QueueTicketService {
           'Ticket was already replaced by another request.',
         );
       }
-      if (patientSelfService) {
-        if (
-          visit.patientId !== actor.id ||
-          dto.kind !== QueueTicketKind.HALL ||
-          visit.status !== VisitStatus.HALL_WAITING ||
-          visit.hallReissueCount >= MAX_PATIENT_HALL_REISSUES
-        ) {
-          throw new ForbiddenException('Patient hall-ticket reissue is not available.');
-        }
-      } else if (![Role.NURSE, Role.RECEPTIONIST].includes(actor.role) || !dto.reason?.trim()) {
+      if (![Role.NURSE, Role.RECEPTIONIST].includes(actor.role) || !dto.reason?.trim()) {
         throw new BadRequestException('Clinical staff must provide a reissue reason.');
       }
       if (
@@ -638,10 +656,21 @@ export class QueueTicketService {
           'Ticket cannot be reissued after examination starts.',
         );
       }
-      if (patientSelfService && oldTicket.status === QueueTicketStatus.EXPIRED) {
+      if (
+        dto.kind === QueueTicketKind.HALL &&
+        (actor.role !== Role.RECEPTIONIST ||
+          visit.status !== VisitStatus.HALL_WAITING ||
+          (oldTicket.status !== QueueTicketStatus.EXPIRED &&
+            oldTicket.status !== QueueTicketStatus.SUPERSEDED &&
+            !(
+              oldTicket.status === QueueTicketStatus.PAUSED &&
+              oldTicket.callAttempts > 3 &&
+              oldTicket.businessDate === businessDate
+            )))
+      ) {
         throw clinicalConflict(
-          'TICKET_EXPIRED',
-          'Expired tickets can only be reissued by reception staff.',
+          'VISIT_STATE_CONFLICT',
+          'Chỉ cấp lại vé sảnh hết hạn, đã vô hiệu hoặc tạm hoãn sau hơn 3 lần gọi trong ngày.',
         );
       }
       const scopeKey = dto.kind === QueueTicketKind.HALL ? 'FACILITY' : oldTicket.scopeKey;
@@ -671,7 +700,6 @@ export class QueueTicketService {
       );
       if (dto.kind === QueueTicketKind.HALL) {
         visit.hallTicketNumber = displayNumber;
-        if (patientSelfService) visit.hallReissueCount += 1;
       } else {
         visit.clinicTicketNumber = displayNumber;
         visit.status = VisitStatus.CLINIC_WAITING;
@@ -702,6 +730,7 @@ export class QueueTicketService {
         },
         manager,
       );
+      await refreshReceptionEtaHistory(manager, this.config);
       return this.ticketResponse(visit, ticket);
     });
   }

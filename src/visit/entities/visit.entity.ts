@@ -85,9 +85,6 @@ export class Visit extends BaseEntity {
   @Column({ name: 'return_reported_at', type: 'timestamptz', nullable: true })
   returnReportedAt?: Date | null;
 
-  @Column({ name: 'hall_reissue_count', type: 'int', default: 0 })
-  hallReissueCount: number;
-
   @Column({ name: 'intake_completed_at', type: 'timestamptz', nullable: true })
   intakeCompletedAt?: Date;
 

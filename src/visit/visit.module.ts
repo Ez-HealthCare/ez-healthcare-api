@@ -13,6 +13,8 @@ import { VisitController } from './visit.controller';
 import { TriageModule } from '../triage/triage.module';
 import { DoctorSchedule } from '../department/entities/doctor-schedule.entity';
 import { QueueCounter } from './entities/queue-counter.entity';
+import { ReceptionDeskShift } from './entities/reception-desk-shift.entity';
+import { ReceptionEtaForecast } from './entities/reception-eta-forecast.entity';
 import { QueueTicket } from './entities/queue-ticket.entity';
 import { NotificationModule } from '../notification/notification.module';
 import { QueueTicketService } from './queue-ticket.service';
@@ -21,7 +23,6 @@ import { ReceptionRealtimeService } from './reception-realtime.service';
 import { ClinicQueueService } from './clinic-queue.service';
 import { Appointment } from '../appointment/entities/appointment.entity';
 import { AppointmentService } from '../appointment/appointment.service';
-import { AppointmentController } from '../appointment/appointment.controller';
 
 @Module({
   imports: [
@@ -37,12 +38,14 @@ import { AppointmentController } from '../appointment/appointment.controller';
       DoctorSchedule,
       QueueCounter,
       QueueTicket,
+      ReceptionDeskShift,
+      ReceptionEtaForecast,
       Appointment,
     ]),
     TriageModule,
     NotificationModule,
   ],
-  controllers: [VisitController, AppointmentController],
+  controllers: [VisitController],
   providers: [
     VisitService,
     QueueTicketService,

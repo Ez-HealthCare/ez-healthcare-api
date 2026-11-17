@@ -28,6 +28,7 @@ export interface UserPublicDto {
 
 /** Full profile with PII — only for ADMIN / RECEPTIONIST role */
 export interface UserFullDto extends UserPublicDto {
+  isPregnant?: boolean;
   nationalId?: string;
   insuranceCardNumber?: string;
   allergies?: string[];
@@ -161,6 +162,7 @@ export function toUserFull(user: any): UserFullDto | undefined {
     nationalId: user.nationalId,
     insuranceCardNumber: user.insuranceCardNumber,
     allergies: user.allergies,
+    isPregnant: user.isPregnant,
   };
 }
 

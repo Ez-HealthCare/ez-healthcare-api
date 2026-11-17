@@ -40,6 +40,13 @@ export const SEED_USERS = [
     phone: '+1-555-0104',
   },
   {
+    email: 'reception.linh@ezhealthcare.com',
+    passwordRaw: 'Reception@123456',
+    name: 'Nguyễn Thu Linh',
+    role: Role.RECEPTIONIST,
+    phone: '+1-555-0120',
+  },
+  {
     email: 'lab.tech@ezhealthcare.com',
     passwordRaw: 'Lab@123456',
     name: 'Alex Turner, MLS',

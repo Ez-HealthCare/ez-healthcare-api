@@ -1,12 +1,8 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Not, IsNull, Repository } from 'typeorm';
+import { EntityManager, In, Not, IsNull, MoreThan, Repository } from 'typeorm';
 import { AuditService } from '../common/audit.service';
-import {
-  ELDERLY_PRIORITY_AGE,
-  MAX_PATIENT_HALL_REISSUES,
-  VN_OFFSET_MS,
-} from '../common/constants/clinical.constants';
+import { ELDERLY_PRIORITY_AGE, VN_OFFSET_MS } from '../common/constants/clinical.constants';
 import { ApiConfigService } from '../config/api-config.service';
 import { User } from '../database/entities/user.entity';
 import { Department } from '../department/entities/department.entity';
@@ -15,12 +11,13 @@ import { RoomType } from '../department/enums/room-type.enum';
 import { NotificationService } from '../notification/notification.service';
 import { Role } from '../user/enums/role.enum';
 import { getBusinessTime } from './business-time';
-import { clinicalConflict } from './clinical-error';
+import { clinicalConflict, clinicalForbidden } from './clinical-error';
 import { AssignClinicDto } from './dto/assign-clinic.dto';
 import { RecordIntakeDto } from './dto/record-intake.dto';
 import { ReceptionRecordsQueryDto } from './dto/reception-records-query.dto';
 import { RejectVerificationDto, VerifyVisitDto } from './dto/verify-visit.dto';
 import { PauseHallTicketDto } from './dto/queue-action.dto';
+import { ReceptionDeskShift } from './entities/reception-desk-shift.entity';
 import { QueueTicket } from './entities/queue-ticket.entity';
 import { VisitVital } from './entities/visit-vital.entity';
 import { Visit } from './entities/visit.entity';
@@ -32,7 +29,11 @@ import {
 import { VisitStatus } from './enums/visit-status.enum';
 import { calculateNews2 } from './news2-calculator';
 import { QueueTicketService } from './queue-ticket.service';
+import { ageOnDate } from './hall-priority';
 import { estimateReceptionStart } from './reception-eta';
+import { ReceptionEtaForecast } from './entities/reception-eta-forecast.entity';
+import { refreshReceptionEtaHistory } from './reception-eta-history';
+import { compareReadyQueue } from './ready-queue';
 import { assertTransition } from './visit-state-machine';
 
 type Actor = { id: string; role: Role };
@@ -50,6 +51,186 @@ export class ReceptionService {
     private readonly audit: AuditService,
   ) {}
 
+  private receptionTransaction<T>(operation: (manager: EntityManager) => Promise<T>) {
+    return this.queue.transaction(async (manager) => {
+      if (this.config.receptionDeskShiftsEnabled) {
+        await manager.query("SELECT pg_advisory_xact_lock(hashtext('reception-desk-queue'))");
+      }
+      const result = await operation(manager);
+      await refreshReceptionEtaHistory(manager, this.config);
+      return result;
+    });
+  }
+
+  private async currentDesk(manager: EntityManager, receptionistId: string) {
+    const { businessDate, shiftType } = getBusinessTime(
+      new Date(),
+      this.config.queueIssuanceWindows,
+    );
+    if (!shiftType) return null;
+    return manager
+      .getRepository(ReceptionDeskShift)
+      .findOneBy({ businessDate, shiftType, receptionistId });
+  }
+
+  private async requireDesk(manager: EntityManager, receptionistId: string) {
+    const desk = await this.currentDesk(manager, receptionistId);
+    if (!desk) {
+      throw clinicalForbidden(
+        'RECEPTION_DESK_ACCESS_DENIED',
+        'Bạn chưa được phân quầy trong ca hiện tại.',
+      );
+    }
+    return desk;
+  }
+
+  private async heldTicket(manager: EntityManager, deskCode: string) {
+    return manager.getRepository(QueueTicket).findOneBy({
+      kind: QueueTicketKind.HALL,
+      status: QueueTicketStatus.CALLED,
+      receptionDeskCode: deskCode,
+      expiresAt: MoreThan(new Date()),
+    });
+  }
+
+  private async requireFreeDesk(manager: EntityManager, desk: ReceptionDeskShift) {
+    if (await this.heldTicket(manager, desk.deskCode)) {
+      throw clinicalConflict('RECEPTION_DESK_BUSY', 'Quầy đang giữ một lượt tiếp nhận.');
+    }
+  }
+
+  async getReceptionDesk(receptionistId: string) {
+    const manager = this.tickets.manager;
+    const desk = await this.currentDesk(manager, receptionistId);
+    if (!desk) return null;
+    const held = await this.heldTicket(manager, desk.deskCode);
+    return {
+      code: desk.deskCode,
+      name: 'Quầy tiếp đón ' + desk.deskCode,
+      businessDate: desk.businessDate,
+      shiftType: desk.shiftType,
+      acceptingCalls: desk.acceptingCalls,
+      workflowEnabled: this.config.receptionDeskShiftsEnabled,
+      occupied: !!held,
+      currentVisitId: held?.receptionDeskShiftId === desk.id ? held.visitId : null,
+    };
+  }
+
+  async setReceptionDeskAvailability(actor: Actor, acceptingCalls: boolean) {
+    if (!this.config.receptionDeskShiftsEnabled) throw new NotFoundException();
+    return this.receptionTransaction(async (manager) => {
+      const desk = await this.requireDesk(manager, actor.id);
+      if (desk.acceptingCalls !== acceptingCalls) {
+        desk.acceptingCalls = acceptingCalls;
+        await manager.getRepository(ReceptionDeskShift).save(desk);
+        await this.audit.log(
+          {
+            action: acceptingCalls ? 'RESUME_RECEPTION_DESK' : 'PAUSE_RECEPTION_DESK',
+            actorId: actor.id,
+            actorRole: actor.role,
+            targetEntityType: 'ReceptionDeskShift',
+            targetEntityId: desk.id,
+            metadata: { deskCode: desk.deskCode },
+          },
+          manager,
+        );
+      }
+      return { code: desk.deskCode, acceptingCalls };
+    });
+  }
+
+  private async assertDeskOwnsTicket(manager: EntityManager, ticket: QueueTicket, actor: Actor) {
+    const shift = ticket.receptionDeskShiftId
+      ? await manager
+          .getRepository(ReceptionDeskShift)
+          .findOneBy({ id: ticket.receptionDeskShiftId })
+      : null;
+    if (!shift || shift.receptionistId !== actor.id) {
+      throw clinicalForbidden(
+        'RECEPTION_DESK_ACCESS_DENIED',
+        'Lượt tiếp nhận chưa được gắn với quầy của bạn.',
+      );
+    }
+  }
+
+  async startVerification(id: string, actor: Actor) {
+    if (!this.config.receptionDeskShiftsEnabled) throw new NotFoundException();
+    return this.receptionTransaction(async (manager) => {
+      const visit = await this.queue.lockVisit(manager, id);
+      const ticket = await this.queue.activeTicket(id, QueueTicketKind.HALL, manager);
+      if (
+        visit.status !== VisitStatus.HALL_WAITING ||
+        ticket?.status !== QueueTicketStatus.CALLED
+      ) {
+        throw clinicalConflict('VISIT_STATE_CONFLICT', 'Chỉ bắt đầu xác minh lượt đã được gọi.');
+      }
+      if (!ticket.receptionDeskShiftId) {
+        const desk = await this.requireDesk(manager, actor.id);
+        if (!desk.acceptingCalls) {
+          throw clinicalConflict('RECEPTION_DESK_PAUSED', 'Hãy mở lại quầy trước khi nhận lượt.');
+        }
+        await this.requireFreeDesk(manager, desk);
+        ticket.receptionDeskShiftId = desk.id;
+        ticket.receptionDeskCode = desk.deskCode;
+      } else {
+        await this.assertDeskOwnsTicket(manager, ticket, actor);
+      }
+      if (!ticket.verificationStartedAt) {
+        ticket.verificationStartedAt = new Date();
+        await manager.getRepository(QueueTicket).save(ticket);
+        if (this.config.receptionEta) {
+          await manager
+            .getRepository(ReceptionEtaForecast)
+            .update(
+              { ticketId: ticket.id, queuedAt: ticket.queuedAt, actualStartedAt: IsNull() },
+              { actualStartedAt: ticket.verificationStartedAt },
+            );
+        }
+        await this.audit.log(
+          {
+            action: 'START_RECEPTION_VERIFICATION',
+            actorId: actor.id,
+            actorRole: actor.role,
+            targetEntityType: 'Visit',
+            targetEntityId: id,
+            metadata: {
+              ticketId: ticket.id,
+              deskCode: ticket.receptionDeskCode,
+              startedAt: ticket.verificationStartedAt,
+            },
+          },
+          manager,
+        );
+      }
+      return { visitId: id, ...this.receptionTicketDetails(ticket) };
+    });
+  }
+
+  private receptionTicketDetails(ticket?: QueueTicket) {
+    return {
+      receptionDeskCode: ticket?.receptionDeskCode ?? null,
+      verificationStartedAt: ticket?.verificationStartedAt ?? null,
+      receptionReleasedAt: ticket?.receptionReleasedAt ?? null,
+    };
+  }
+
+  private async completeDeskVerification(
+    manager: EntityManager,
+    ticket: QueueTicket,
+    actor: Actor,
+  ) {
+    if (!this.config.receptionDeskShiftsEnabled) return;
+    if (!ticket.verificationStartedAt) {
+      throw clinicalConflict(
+        'VERIFICATION_NOT_STARTED',
+        'Hãy bắt đầu xác minh trước khi gửi kết quả.',
+      );
+    }
+    await this.assertDeskOwnsTicket(manager, ticket, actor);
+    ticket.receptionReleasedAt = new Date();
+    await manager.getRepository(QueueTicket).save(ticket);
+  }
+
   private queueVisit(visit: Visit, ticket?: QueueTicket) {
     return {
       visitId: visit.id,
@@ -57,6 +238,7 @@ export class ReceptionService {
       clinicTicketNumber: visit.clinicTicketNumber,
       status: visit.status,
       returnReportedAt: visit.returnReportedAt,
+      ...this.receptionTicketDetails(ticket),
       ticketKind: ticket?.kind,
       ticketStatus: ticket?.status,
       callAttempts: ticket?.callAttempts,
@@ -67,6 +249,12 @@ export class ReceptionService {
         id: visit.patient.id,
         name: visit.patient.name,
         dateOfBirth: visit.patient.dateOfBirth,
+        age: ageOnDate(
+          visit.patient.dateOfBirth,
+          ticket?.businessDate ??
+            getBusinessTime(new Date(), this.config.queueIssuanceWindows).businessDate,
+        ),
+        isPregnant: visit.patient.gender === 'FEMALE' && !!visit.patient.isPregnant,
         nationalId: visit.patient.nationalId,
         insuranceCardNumber: visit.patient.insuranceCardNumber,
         allergies: visit.patient.allergies,
@@ -77,6 +265,7 @@ export class ReceptionService {
       symptomSeverity: visit.symptomSeverity,
       intakeCompleted: !!visit.intakeCompletedAt,
       isPriority: visit.isPriority,
+      hallReissued: ticket?.kind === QueueTicketKind.HALL && !!ticket.reissueOfId,
       priorityReason: visit.priorityReason,
       createdAt: visit.createdAt,
       room: visit.currentDepartment
@@ -118,6 +307,7 @@ export class ReceptionService {
     ]);
     return {
       visitId: visit.id,
+      ...this.receptionTicketDetails(ticket.kind === QueueTicketKind.HALL ? ticket : undefined),
       ...(receptionEta && { receptionEta }),
       ...(stageEta && { stageEta }),
       hallTicketNumber: visit.hallTicketNumber,
@@ -131,11 +321,6 @@ export class ReceptionService {
         visit.status === VisitStatus.TEMPORARILY_ABSENT &&
         ticket.kind === QueueTicketKind.CLINIC &&
         ticket.status === QueueTicketStatus.PAUSED,
-      canPatientReissue:
-        ticket.status === QueueTicketStatus.ACTIVE &&
-        ticket.kind === QueueTicketKind.HALL &&
-        visit.status === VisitStatus.HALL_WAITING &&
-        visit.hallReissueCount < MAX_PATIENT_HALL_REISSUES,
       ticketStatus: ticket.status,
       businessDate: ticket.businessDate,
       expiresAt: ticket.expiresAt,
@@ -143,11 +328,15 @@ export class ReceptionService {
     };
   }
 
-  async confirmStageArrival(id: string, patientId: string, station: string, ticketNumber?: string) {
+  async confirmStageArrival(id: string, actor: Actor, station: string, ticketNumber?: string) {
     if (!this.config.downstreamEta) throw new NotFoundException();
     return this.queue.transaction(async (manager) => {
       const visit = await this.queue.lockVisit(manager, id);
-      if (visit.patientId !== patientId) throw new NotFoundException();
+      if (actor.role === Role.PATIENT && visit.patientId !== actor.id)
+        throw new NotFoundException();
+      const staffAllowed =
+        station === 'triage' ? actor.role === Role.NURSE : actor.role === Role.DOCTOR;
+      if (actor.role !== Role.PATIENT && !staffAllowed) throw new NotFoundException();
       const expected =
         station === 'triage' ? VisitStatus.TRIAGE_PENDING : VisitStatus.CLINIC_WAITING;
       if (!['triage', 'clinic'].includes(station) || visit.status !== expected) {
@@ -156,7 +345,10 @@ export class ReceptionService {
           'The visit is no longer waiting at this station.',
         );
       }
+      const alreadyArrived = station === 'triage' ? visit.triageArrivedAt : visit.clinicArrivedAt;
       if (station === 'triage') {
+        if (visit.intakeCompletedAt)
+          throw clinicalConflict('VISIT_STATE_CONFLICT', 'Triage already completed.');
         visit.triageArrivedAt ??= new Date();
       } else {
         const ticket = await this.queue.activeTicket(id, QueueTicketKind.CLINIC, manager);
@@ -168,9 +360,38 @@ export class ReceptionService {
         ) {
           throw clinicalConflict('TICKET_EXPIRED', 'The clinic ticket is no longer active.');
         }
+        if (actor.role === Role.DOCTOR) {
+          const { shiftType, businessDate } = getBusinessTime(
+            new Date(),
+            this.config.queueIssuanceWindows,
+          );
+          const schedule =
+            shiftType &&
+            visit.currentDepartmentId &&
+            (await manager.getRepository(DoctorSchedule).findOneBy({
+              doctorId: actor.id,
+              departmentId: visit.currentDepartmentId,
+              shiftDate: new Date(businessDate),
+              shiftType,
+            }));
+          if (!schedule) throw new NotFoundException();
+        }
         visit.clinicArrivedAt ??= new Date();
       }
-      await manager.getRepository(Visit).save(visit);
+      if (!alreadyArrived) {
+        await manager.getRepository(Visit).save(visit);
+        await this.audit.log(
+          {
+            action: 'CONFIRM_STATION_ARRIVAL',
+            actorId: actor.id,
+            actorRole: actor.role,
+            targetEntityType: 'Visit',
+            targetEntityId: id,
+            metadata: { station, ticketNumber },
+          },
+          manager,
+        );
+      }
       return { arrived: true };
     });
   }
@@ -185,8 +406,42 @@ export class ReceptionService {
           'The visit is no longer waiting for triage.',
         );
       }
-      visit.triageStartedAt ??= new Date();
-      visit.triageArrivedAt ??= visit.triageStartedAt;
+      if (visit.triageStartedAt) return { started: true };
+      if (!visit.triageArrivedAt) {
+        throw clinicalConflict('VISIT_STATE_CONFLICT', 'Confirm arrival before starting triage.');
+      }
+      await manager.query("SELECT pg_advisory_xact_lock(hashtext('triage-ready-queue'))");
+      const rows = await manager.getRepository(Visit).findBy({
+        status: VisitStatus.TRIAGE_PENDING,
+        intakeCompletedAt: IsNull(),
+        triageArrivedAt: Not(IsNull()),
+      });
+      const config = this.config.downstreamEta;
+      if (!config) throw new NotFoundException();
+      const { businessDate } = getBusinessTime(new Date(), this.config.queueIssuanceWindows);
+      const today = rows.filter(
+        (row) =>
+          new Date(row.triageArrivedAt!.getTime() + VN_OFFSET_MS).toISOString().slice(0, 10) ===
+          businessDate,
+      );
+      if (today.filter((row) => row.triageStartedAt).length >= config.triageCounters) {
+        throw clinicalConflict('VISIT_STATE_CONFLICT', 'All triage counters are occupied.');
+      }
+      const next = today
+        .filter((row) => !row.triageStartedAt)
+        .sort((a, b) =>
+          compareReadyQueue(
+            { visitId: a.id, isPriority: a.isPriority, readyAt: a.triageArrivedAt },
+            { visitId: b.id, isPriority: b.isPriority, readyAt: b.triageArrivedAt },
+          ),
+        )[0];
+      if (next?.id !== id) {
+        throw clinicalConflict(
+          'VISIT_STATE_CONFLICT',
+          'Start triage with the next eligible patient.',
+        );
+      }
+      visit.triageStartedAt = new Date();
       await manager.getRepository(Visit).save(visit);
       return { started: true };
     });
@@ -275,11 +530,11 @@ export class ReceptionService {
       duration = schedule.slotDurationMin;
     }
 
-    waiting.sort(
-      (a, b) =>
-        Number(b.isPriority) - Number(a.isPriority) ||
-        arrivedAt(a)!.getTime() - arrivedAt(b)!.getTime() ||
-        a.id.localeCompare(b.id),
+    waiting.sort((a, b) =>
+      compareReadyQueue(
+        { visitId: a.id, isPriority: a.isPriority, readyAt: arrivedAt(a) },
+        { visitId: b.id, isPriority: b.isPriority, readyAt: arrivedAt(b) },
+      ),
     );
     const ahead = waiting.findIndex((row) => row.id === visit.id);
     if (ahead >= 0 && duration > 0) {
@@ -296,63 +551,25 @@ export class ReceptionService {
   }
 
   private async getReceptionEta(ticket: QueueTicket) {
-    const settings = this.config.receptionEta;
     if (
-      !settings ||
+      !this.config.receptionEta ||
       ticket.kind !== QueueTicketKind.HALL ||
       ticket.status !== QueueTicketStatus.ACTIVE ||
       ticket.visit.status !== VisitStatus.HALL_WAITING
     ) {
       return undefined;
     }
+    const forecast = await this.tickets.manager.getRepository(ReceptionEtaForecast).findOne({
+      where: { ticketId: ticket.id, queuedAt: ticket.queuedAt },
+      order: { version: 'DESC' },
+    });
+    return forecast
+      ? { estimatedStartAt: forecast.estimatedStartAt, calculatedAt: forecast.calculatedAt }
+      : { estimatedStartAt: null, calculatedAt: new Date() };
+  }
 
-    const hall = await this.tickets
-      .createQueryBuilder('ticket')
-      .innerJoin('ticket.visit', 'visit')
-      .where('ticket.kind = :kind', { kind: QueueTicketKind.HALL })
-      .andWhere('ticket.business_date = :businessDate', { businessDate: ticket.businessDate })
-      .andWhere('ticket.status IN (:...statuses)', {
-        statuses: [QueueTicketStatus.ACTIVE, QueueTicketStatus.CALLED],
-      })
-      .andWhere('visit.status = :visitStatus', { visitStatus: VisitStatus.HALL_WAITING })
-      .orderBy('visit."isPriority"', 'DESC')
-      .addOrderBy('ticket.queued_at', 'ASC')
-      .addOrderBy('ticket.sequence', 'ASC')
-      .getMany();
-
-    const waitingAhead = hall
-      .filter((entry) => entry.status === QueueTicketStatus.ACTIVE)
-      .findIndex((entry) => entry.id === ticket.id);
-    if (waitingAhead < 0) return undefined;
-
-    const now = new Date();
-    const localTime = new Date(now.getTime() + VN_OFFSET_MS).toISOString();
-    const localClock = localTime.slice(11, 16);
-    const window = this.config.queueIssuanceWindows.find(
-      ({ start, end }) => localClock >= start && localClock < end,
-    );
-
-    let estimatedStartAt: Date | null = null;
-    if (window && localTime.slice(0, 10) === ticket.businessDate) {
-      const [hours, minutes] = window.end.split(':').map(Number);
-      const closesAt = new Date(
-        Date.parse(ticket.businessDate + 'T00:00:00Z') -
-          VN_OFFSET_MS +
-          (hours * 60 + minutes) * 60_000,
-      );
-      estimatedStartAt = estimateReceptionStart(
-        now,
-        closesAt,
-        settings.counterCount,
-        settings.serviceMinutes,
-        waitingAhead,
-        hall
-          .filter((entry) => entry.status === QueueTicketStatus.CALLED)
-          .map((entry) => entry.lastCalledAt),
-      );
-    }
-
-    return { estimatedStartAt, calculatedAt: now };
+  refreshEtaHistory() {
+    return this.queue.transaction((manager) => refreshReceptionEtaHistory(manager, this.config));
   }
 
   async getReceptionQueue() {
@@ -373,8 +590,10 @@ export class ReceptionService {
       .filter((ticket) => ticket.visit.status === VisitStatus.HALL_WAITING)
       .sort(
         (a, b) =>
-          Number(b.visit.isPriority) - Number(a.visit.isPriority) ||
-          a.queuedAt.getTime() - b.queuedAt.getTime(),
+          Number(!b.reissueOfId && b.visit.isPriority) -
+            Number(!a.reissueOfId && a.visit.isPriority) ||
+          a.queuedAt.getTime() - b.queuedAt.getTime() ||
+          a.sequence - b.sequence,
       )
       .map((ticket) => this.queueVisit(ticket.visit, ticket));
   }
@@ -454,6 +673,25 @@ export class ReceptionService {
       relations: { patient: true, vital: true, currentDepartment: true },
       order: { isPriority: 'DESC', createdAt: 'ASC' },
     });
+    const config = this.config.downstreamEta;
+    const { businessDate } = getBusinessTime(new Date(), this.config.queueIssuanceWindows);
+    const isReadyToday = (visit: Visit) =>
+      visit.triageArrivedAt &&
+      new Date(visit.triageArrivedAt.getTime() + VN_OFFSET_MS).toISOString().slice(0, 10) ===
+        businessDate;
+    let next: Visit | undefined;
+    if (config) {
+      visits.sort((a, b) =>
+        compareReadyQueue(
+          { visitId: a.id, isPriority: a.isPriority, readyAt: a.triageArrivedAt },
+          { visitId: b.id, isPriority: b.isPriority, readyAt: b.triageArrivedAt },
+        ),
+      );
+      const eligible = visits.filter((visit) => isReadyToday(visit) && !visit.intakeCompletedAt);
+      if (eligible.filter((visit) => visit.triageStartedAt).length < config.triageCounters) {
+        next = eligible.find((visit) => !visit.triageStartedAt);
+      }
+    }
     return visits.map((visit) => ({
       ...this.queueVisit(visit),
       triageArrival:
@@ -464,8 +702,7 @@ export class ReceptionService {
               ? 'waiting'
               : 'travelling'
           : undefined,
-      canStartTriage:
-        !!this.config.downstreamEta && !visit.triageStartedAt && !visit.intakeCompletedAt,
+      canStartTriage: next?.id === visit.id,
     }));
   }
 
@@ -486,73 +723,123 @@ export class ReceptionService {
   }
 
   async callHallTicket(id: string, actor: Actor) {
-    return this.queue.transaction(async (manager) => {
-      const visit = await this.queue.lockVisit(manager, id);
-      if (visit.status !== VisitStatus.HALL_WAITING) {
-        throw clinicalConflict(
-          'VISIT_STATE_CONFLICT',
-          'Only a patient waiting at reception can be called.',
+    return this.receptionTransaction(async (manager) => {
+      if (this.config.receptionDeskShiftsEnabled) {
+        await this.queue.expireDueTickets(new Date(), manager);
+        const desk = await this.requireDesk(manager, actor.id);
+        const next = await this.findNextHallTicket(
+          manager.getRepository(QueueTicket),
+          desk.businessDate,
         );
+        if (next?.visitId !== id) {
+          throw clinicalConflict('VISIT_STATE_CONFLICT', 'Hãy gọi lượt đủ điều kiện đầu hàng.');
+        }
+        return this.claimHallTicket(manager, id, actor, desk);
       }
-      const ticket = await this.queue.activeTicket(id, QueueTicketKind.HALL, manager);
-      if (!ticket || ticket.status !== QueueTicketStatus.ACTIVE) {
-        throw clinicalConflict('TICKET_EXPIRED', 'Visit has no active hall ticket.');
-      }
-      ticket.callAttempts += 1;
-      ticket.lastCalledAt = new Date();
-      ticket.status = QueueTicketStatus.CALLED;
-      await manager.getRepository(QueueTicket).save(ticket);
-      await this.notifications.create(
-        {
-          userId: visit.patientId,
-          visitId: visit.id,
-          type: 'HALL_TICKET_CALLED',
-          title: 'Mời đến quầy tiếp nhận',
-          message: `Mời số ${visit.hallTicketNumber} đến quầy tiếp nhận.`,
-        },
-        manager,
-      );
-      await this.audit.log(
-        {
-          action: 'CALL_HALL_TICKET',
-          actorId: actor.id,
-          actorRole: actor.role,
-          targetEntityType: 'Visit',
-          targetEntityId: id,
-          metadata: { hallTicketNumber: visit.hallTicketNumber, callAttempts: ticket.callAttempts },
-        },
-        manager,
-      );
-      return {
-        visitId: id,
-        status: visit.status,
-        ticketStatus: ticket.status,
-        callAttempts: ticket.callAttempts,
-        lastCalledAt: ticket.lastCalledAt,
-      };
+      return this.claimHallTicket(manager, id, actor);
     });
   }
 
+  private async claimHallTicket(
+    manager: EntityManager,
+    id: string,
+    actor: Actor,
+    desk?: ReceptionDeskShift,
+  ) {
+    if (desk) {
+      if (!desk.acceptingCalls) {
+        throw clinicalConflict('RECEPTION_DESK_PAUSED', 'Quầy đang tạm ngừng nhận lượt mới.');
+      }
+      await this.requireFreeDesk(manager, desk);
+    }
+    const visit = await this.queue.lockVisit(manager, id);
+    if (visit.status !== VisitStatus.HALL_WAITING) {
+      throw clinicalConflict(
+        'VISIT_STATE_CONFLICT',
+        'Only a patient waiting at reception can be called.',
+      );
+    }
+    const ticket = await this.queue.activeTicket(id, QueueTicketKind.HALL, manager);
+    if (!ticket || ticket.status !== QueueTicketStatus.ACTIVE) {
+      throw clinicalConflict('TICKET_EXPIRED', 'Visit has no active hall ticket.');
+    }
+    ticket.callAttempts += 1;
+    ticket.lastCalledAt = new Date();
+    ticket.status = QueueTicketStatus.CALLED;
+    if (desk) {
+      ticket.receptionDeskShiftId = desk.id;
+      ticket.receptionDeskCode = desk.deskCode;
+      ticket.verificationStartedAt = null;
+      ticket.receptionReleasedAt = null;
+    }
+    await manager.getRepository(QueueTicket).save(ticket);
+    await this.notifications.create(
+      {
+        userId: visit.patientId,
+        visitId: visit.id,
+        type: 'HALL_TICKET_CALLED',
+        title: 'Mời đến quầy tiếp nhận',
+        message: `Mời số ${visit.hallTicketNumber} đến ${desk ? `Quầy tiếp đón ${desk.deskCode}` : 'quầy tiếp nhận'}.`,
+      },
+      manager,
+    );
+    await this.audit.log(
+      {
+        action: 'CALL_HALL_TICKET',
+        actorId: actor.id,
+        actorRole: actor.role,
+        targetEntityType: 'Visit',
+        targetEntityId: id,
+        metadata: {
+          hallTicketNumber: visit.hallTicketNumber,
+          callAttempts: ticket.callAttempts,
+          deskCode: ticket.receptionDeskCode,
+        },
+      },
+      manager,
+    );
+    return {
+      visitId: id,
+      status: visit.status,
+      ticketStatus: ticket.status,
+      callAttempts: ticket.callAttempts,
+      lastCalledAt: ticket.lastCalledAt,
+      ...this.receptionTicketDetails(ticket),
+    };
+  }
+
   async callNextHallTicket(actor: Actor) {
-    await this.queue.expireDueTickets();
-    const { businessDate } = getBusinessTime(new Date(), this.config.queueIssuanceWindows);
-    const next = await this.tickets
+    return this.receptionTransaction(async (manager) => {
+      await this.queue.expireDueTickets(new Date(), manager);
+      const { businessDate } = getBusinessTime(new Date(), this.config.queueIssuanceWindows);
+      const desk = this.config.receptionDeskShiftsEnabled
+        ? await this.requireDesk(manager, actor.id)
+        : undefined;
+      const next = await this.findNextHallTicket(manager.getRepository(QueueTicket), businessDate);
+      if (!next) throw new NotFoundException('No patient is waiting at reception.');
+      return this.claimHallTicket(manager, next.visitId, actor, desk);
+    });
+  }
+
+  private findNextHallTicket(tickets: Repository<QueueTicket>, businessDate: string) {
+    return tickets
       .createQueryBuilder('ticket')
       .innerJoinAndSelect('ticket.visit', 'visit')
       .where('ticket.kind = :kind', { kind: QueueTicketKind.HALL })
       .andWhere('ticket.business_date = :businessDate', { businessDate })
       .andWhere('ticket.status = :ticketStatus', { ticketStatus: QueueTicketStatus.ACTIVE })
       .andWhere('visit.status = :visitStatus', { visitStatus: VisitStatus.HALL_WAITING })
-      .orderBy('visit."isPriority"', 'DESC')
+      .orderBy(
+        'CASE WHEN ticket.reissue_of_id IS NULL AND visit."isPriority" THEN 1 ELSE 0 END',
+        'DESC',
+      )
       .addOrderBy('ticket.queued_at', 'ASC')
       .addOrderBy('ticket.sequence', 'ASC')
       .getOne();
-    if (!next) throw new NotFoundException('No patient is waiting at reception.');
-    return this.callHallTicket(next.visitId, actor);
   }
 
   async pauseHallTicket(id: string, dto: PauseHallTicketDto, actor: Actor) {
-    return this.queue.transaction(async (manager) => {
+    return this.receptionTransaction(async (manager) => {
       const visit = await this.queue.lockVisit(manager, id);
       if (visit.status !== VisitStatus.HALL_WAITING) {
         throw clinicalConflict(
@@ -561,8 +848,22 @@ export class ReceptionService {
         );
       }
       const ticket = await this.queue.activeTicket(id, QueueTicketKind.HALL, manager);
-      if (!ticket || ticket.status !== QueueTicketStatus.ACTIVE) {
+      if (!ticket) {
         throw clinicalConflict('TICKET_EXPIRED', 'Visit has no active hall ticket.');
+      }
+      if (
+        ticket.status !== QueueTicketStatus.ACTIVE &&
+        ticket.status !== QueueTicketStatus.CALLED
+      ) {
+        throw clinicalConflict(
+          'VISIT_STATE_CONFLICT',
+          'Only waiting or called tickets can be paused.',
+        );
+      }
+      if (this.config.receptionDeskShiftsEnabled && ticket.status === QueueTicketStatus.CALLED) {
+        if (ticket.receptionDeskShiftId) await this.assertDeskOwnsTicket(manager, ticket, actor);
+        else await this.requireDesk(manager, actor.id);
+        ticket.receptionReleasedAt = new Date();
       }
       ticket.status = QueueTicketStatus.PAUSED;
       ticket.reissueReason = dto.reason.trim();
@@ -574,7 +875,12 @@ export class ReceptionService {
           actorRole: actor.role,
           targetEntityType: 'Visit',
           targetEntityId: id,
-          metadata: { hallTicketNumber: visit.hallTicketNumber, reason: dto.reason.trim() },
+          metadata: {
+            hallTicketNumber: visit.hallTicketNumber,
+            reason: dto.reason.trim(),
+            deskCode: ticket.receptionDeskCode,
+            releasedAt: ticket.receptionReleasedAt,
+          },
         },
         manager,
       );
@@ -583,7 +889,7 @@ export class ReceptionService {
   }
 
   async recallHallTicket(id: string, actor: Actor) {
-    return this.queue.transaction(async (manager) => {
+    return this.receptionTransaction(async (manager) => {
       const visit = await this.queue.lockVisit(manager, id);
       if (visit.status !== VisitStatus.HALL_WAITING) {
         throw clinicalConflict(
@@ -593,20 +899,43 @@ export class ReceptionService {
       }
       const ticket = await this.queue.activeTicket(id, QueueTicketKind.HALL, manager);
       if (!ticket) throw clinicalConflict('TICKET_EXPIRED', 'Hall ticket not found.');
-      ticket.status = QueueTicketStatus.ACTIVE;
-      ticket.callAttempts += 1;
-      ticket.lastCalledAt = new Date();
+      if (ticket.status === QueueTicketStatus.PAUSED) {
+        if (ticket.callAttempts > 3) {
+          throw clinicalConflict(
+            'VISIT_STATE_CONFLICT',
+            'Vé đã quá 3 lần gọi và cần được cấp lại.',
+          );
+        }
+        ticket.status = QueueTicketStatus.ACTIVE;
+        ticket.queuedAt = new Date();
+        if (this.config.receptionDeskShiftsEnabled) {
+          ticket.receptionDeskShiftId = null;
+          ticket.receptionDeskCode = null;
+          ticket.verificationStartedAt = null;
+        }
+      } else if (ticket.status === QueueTicketStatus.CALLED) {
+        if (this.config.receptionDeskShiftsEnabled) {
+          await this.assertDeskOwnsTicket(manager, ticket, actor);
+          if (ticket.verificationStartedAt) {
+            throw clinicalConflict('VISIT_STATE_CONFLICT', 'Lượt đã bắt đầu xác minh.');
+          }
+        }
+        ticket.callAttempts += 1;
+        ticket.lastCalledAt = new Date();
+        await this.notifications.create(
+          {
+            userId: visit.patientId,
+            visitId: visit.id,
+            type: 'HALL_TICKET_CALLED',
+            title: 'Mời đến quầy tiếp nhận',
+            message: `Mời lại số ${visit.hallTicketNumber} đến ${ticket.receptionDeskCode ? `Quầy tiếp đón ${ticket.receptionDeskCode}` : 'quầy tiếp nhận'}.`,
+          },
+          manager,
+        );
+      } else {
+        throw clinicalConflict('VISIT_STATE_CONFLICT', 'Chỉ gọi lại vé đã gọi hoặc đã tạm hoãn.');
+      }
       await manager.getRepository(QueueTicket).save(ticket);
-      await this.notifications.create(
-        {
-          userId: visit.patientId,
-          visitId: visit.id,
-          type: 'HALL_TICKET_CALLED',
-          title: 'Mời đến quầy tiếp nhận',
-          message: `Mời lại số ${visit.hallTicketNumber} đến quầy tiếp nhận.`,
-        },
-        manager,
-      );
       await this.audit.log(
         {
           action: 'RECALL_HALL_TICKET',
@@ -614,7 +943,11 @@ export class ReceptionService {
           actorRole: actor.role,
           targetEntityType: 'Visit',
           targetEntityId: id,
-          metadata: { hallTicketNumber: visit.hallTicketNumber, callAttempts: ticket.callAttempts },
+          metadata: {
+            hallTicketNumber: visit.hallTicketNumber,
+            callAttempts: ticket.callAttempts,
+            deskCode: ticket.receptionDeskCode,
+          },
         },
         manager,
       );
@@ -629,7 +962,7 @@ export class ReceptionService {
   }
 
   async verifyVisit(id: string, dto: VerifyVisitDto, actor: Actor) {
-    return this.queue.transaction(async (manager) => {
+    return this.receptionTransaction(async (manager) => {
       const visit = await this.queue.lockVisit(manager, id);
       const hallTicket = await this.queue.activeTicket(id, QueueTicketKind.HALL, manager);
       if (!hallTicket || hallTicket.status !== QueueTicketStatus.CALLED) {
@@ -638,6 +971,7 @@ export class ReceptionService {
           'Only the patient currently called to the reception desk can be verified.',
         );
       }
+      await this.completeDeskVerification(manager, hallTicket, actor);
       const patient = await manager.getRepository(User).findOne({ where: { id: visit.patientId } });
       if (!patient) throw new NotFoundException('Patient not found.');
       const targetStatus = dto.nationalIdVerified
@@ -704,7 +1038,7 @@ export class ReceptionService {
   }
 
   async rejectVerification(id: string, dto: RejectVerificationDto, actor: Actor) {
-    return this.queue.transaction(async (manager) => {
+    return this.receptionTransaction(async (manager) => {
       const visit = await this.queue.lockVisit(manager, id);
       const hallTicket = await this.queue.activeTicket(id, QueueTicketKind.HALL, manager);
       if (!hallTicket || hallTicket.status !== QueueTicketStatus.CALLED) {
@@ -713,6 +1047,7 @@ export class ReceptionService {
           'Only the patient currently called to the reception desk can be rejected.',
         );
       }
+      await this.completeDeskVerification(manager, hallTicket, actor);
       assertTransition(visit.status, VisitStatus.CANCELLED);
       visit.status = VisitStatus.CANCELLED;
       visit.receptionistId = actor.id;
@@ -898,6 +1233,14 @@ export class ReceptionService {
           'VISIT_STATE_CONFLICT',
           'Intake is locked after examination starts.',
         );
+      }
+      if (
+        this.config.downstreamEta &&
+        visit.status === VisitStatus.TRIAGE_PENDING &&
+        !visit.triageStartedAt &&
+        !visit.intakeCompletedAt
+      ) {
+        throw clinicalConflict('VISIT_STATE_CONFLICT', 'Start triage before saving intake.');
       }
       const patient = await manager.getRepository(User).findOne({ where: { id: visit.patientId } });
       if (!patient) throw new NotFoundException('Patient not found.');

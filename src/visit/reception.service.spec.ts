@@ -1,3 +1,4 @@
+import { QueueTicketStatus } from './enums/queue-ticket.enum';
 import 'reflect-metadata';
 import { jest } from '@jest/globals';
 import { User } from '../database/entities/user.entity';
@@ -83,8 +84,34 @@ function setup(departmentCode = 'NO') {
     { create: jest.fn(async () => ({})) } as any,
     { log: jest.fn(async () => ({})) } as any,
   );
-  return { service, visit, visitRepo, save };
+  return { service, visit, visitRepo, save, queue };
 }
+
+it.each([QueueTicketStatus.ACTIVE, QueueTicketStatus.CALLED])(
+  'pauses a hall ticket in %s and preserves the visit for recall',
+  async (status) => {
+    const { service, visit, queue, save } = setup();
+    visit.status = VisitStatus.HALL_WAITING;
+    const ticket = { status, callAttempts: 1 };
+    Object.assign(queue, { activeTicket: async () => ticket });
+    await expect(
+      service.pauseHallTicket(
+        visit.id,
+        { reason: ' Chưa có mặt ' },
+        { id: 'desk', role: Role.RECEPTIONIST },
+      ),
+    ).resolves.toMatchObject({
+      visitId: visit.id,
+      status: VisitStatus.HALL_WAITING,
+      ticketStatus: QueueTicketStatus.PAUSED,
+    });
+    expect(save).toHaveBeenCalledWith({
+      status: QueueTicketStatus.PAUSED,
+      callAttempts: 1,
+      reissueReason: 'Chưa có mặt',
+    });
+  },
+);
 
 it('N01: loads triage visits independently of completed hall tickets, with priority ordering', async () => {
   const { service, visitRepo } = setup();

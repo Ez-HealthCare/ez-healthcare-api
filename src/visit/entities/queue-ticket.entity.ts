@@ -1,6 +1,7 @@
 import { Column, Entity, Index, JoinColumn, ManyToOne } from 'typeorm';
 import { BaseEntity } from '../../database/entities/base.entity';
 import { User } from '../../database/entities/user.entity';
+import { ReceptionDeskShift } from './reception-desk-shift.entity';
 import type { Visit } from './visit.entity';
 import { QueueTicketKind, QueueTicketStatus } from '../enums/queue-ticket.enum';
 
@@ -15,6 +16,10 @@ import { QueueTicketKind, QueueTicketStatus } from '../enums/queue-ticket.enum';
   where: `"status" IN ('ACTIVE', 'CALLED', 'PAUSED')`,
 })
 @Index('idx_queue_ticket_active_queue', ['businessDate', 'kind', 'scopeKey', 'status', 'queuedAt'])
+@Index('uq_reception_desk_held_ticket', ['receptionDeskCode'], {
+  unique: true,
+  where: "kind = 'HALL' AND status = 'CALLED' AND reception_desk_code IS NOT NULL",
+})
 export class QueueTicket extends BaseEntity {
   @Column({ name: 'visit_id', type: 'uuid' })
   visitId: string;
@@ -74,4 +79,20 @@ export class QueueTicket extends BaseEntity {
 
   @Column({ name: 'last_called_at', type: 'timestamptz', nullable: true })
   lastCalledAt?: Date;
+
+  @Column({ name: 'reception_desk_shift_id', type: 'uuid', nullable: true })
+  receptionDeskShiftId?: string | null;
+
+  @ManyToOne(() => ReceptionDeskShift, { nullable: true })
+  @JoinColumn({ name: 'reception_desk_shift_id' })
+  receptionDeskShift?: ReceptionDeskShift;
+
+  @Column({ name: 'reception_desk_code', type: 'varchar', length: 2, nullable: true })
+  receptionDeskCode?: string | null;
+
+  @Column({ name: 'verification_started_at', type: 'timestamptz', nullable: true })
+  verificationStartedAt?: Date | null;
+
+  @Column({ name: 'reception_released_at', type: 'timestamptz', nullable: true })
+  receptionReleasedAt?: Date | null;
 }

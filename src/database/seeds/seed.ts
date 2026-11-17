@@ -18,6 +18,7 @@ import { Visit } from '../../visit/entities/visit.entity';
 import { VisitVital } from '../../visit/entities/visit-vital.entity';
 import { VisitOrder } from '../../visit/entities/visit-order.entity';
 import { VisitStep } from '../../visit/entities/visit-step.entity';
+import { ReceptionDeskShift } from '../../visit/entities/reception-desk-shift.entity';
 import { QueueTicket } from '../../visit/entities/queue-ticket.entity';
 import { VisitStatus } from '../../visit/enums/visit-status.enum';
 import {
@@ -275,7 +276,6 @@ async function seedDemoScenarios(
       intakeCompletedAt: fixture.intakeCompleted
         ? new Date(Date.now() - 20 * 60 * 1000)
         : undefined,
-      hallReissueCount: 0,
     });
     visit = await visitRepo.save(visit);
     visits.set(fixture.key, visit);
@@ -681,6 +681,32 @@ async function runSeed() {
         schedule.departmentId = room.id;
         schedule.maxQuota = room.maxQuotaPerSlot;
         await scheduleRepo.save(schedule);
+      }
+    }
+  }
+
+  const receptionShiftRepo = dataSource.getRepository(ReceptionDeskShift);
+  const receptionStaff = [
+    { deskCode: '01', email: 'reception.linh@ezhealthcare.com' },
+    { deskCode: '02', email: 'reception.clara@ezhealthcare.com' },
+  ];
+  for (const { deskCode, email } of receptionStaff) {
+    const receptionist = await userRepo.findOneByOrFail({ email });
+    for (let dayOffset = 0; dayOffset < 14; dayOffset += 1) {
+      const date = new Date(businessDate + 'T00:00:00Z');
+      date.setUTCDate(date.getUTCDate() + dayOffset);
+      for (const shiftType of [ShiftType.MORNING, ShiftType.AFTERNOON]) {
+        await receptionShiftRepo
+          .createQueryBuilder()
+          .insert()
+          .values({
+            businessDate: date.toISOString().slice(0, 10),
+            shiftType,
+            deskCode,
+            receptionistId: receptionist.id,
+          })
+          .orIgnore()
+          .execute();
       }
     }
   }

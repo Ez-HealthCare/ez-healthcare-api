@@ -73,6 +73,7 @@ export class UserService {
     user.name = dto.name.trim();
     user.dateOfBirth = new Date(dto.dateOfBirth);
     user.gender = dto.gender.trim();
+    user.isPregnant = user.gender === 'FEMALE' && (dto.isPregnant ?? user.isPregnant ?? false);
     user.phone = dto.phone.trim();
     user.nationalId = nationalId;
     user.allergies = dto.allergies.map((allergy) => allergy.trim()).filter(Boolean);

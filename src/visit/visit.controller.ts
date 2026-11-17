@@ -18,7 +18,7 @@ import { VisitService } from './visit.service';
 import { PatientHistoryQueryDto } from './dto/patient-history-query.dto';
 import { DoctorHistoryQueryDto } from './dto/doctor-history-query.dto';
 import { TriageDagService } from '../triage/triage-dag.service';
-import { CreateHallTicketDto, CreateWalkInTicketDto } from './dto/create-hall-ticket.dto';
+import { CreateHallTicketDto } from './dto/create-hall-ticket.dto';
 import { VerifyVisitDto, RejectVerificationDto } from './dto/verify-visit.dto';
 import { AssignClinicDto } from './dto/assign-clinic.dto';
 import { RecordIntakeDto } from './dto/record-intake.dto';
@@ -66,19 +66,6 @@ export class VisitController {
     return this.queueTicketService.createHallTicket(dto, req.user, idempotencyKey);
   }
 
-  @Post('reception/walk-in')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.RECEPTIONIST)
-  @ApiBearerAuth()
-  @ApiOperation({ summary: 'Reception creates a hall ticket for an existing walk-in patient' })
-  createWalkInTicket(
-    @Body() dto: CreateWalkInTicketDto,
-    @Request() req: any,
-    @Headers('idempotency-key') idempotencyKey?: string,
-  ) {
-    return this.queueTicketService.createWalkInTicket(dto, req.user, idempotencyKey);
-  }
-
   @Post('me/reception-live')
   @HttpCode(HttpStatus.OK)
   @UseGuards(JwtAuthGuard, RolesGuard)
@@ -89,14 +76,14 @@ export class VisitController {
 
   @Post(':id/station-arrival/:station')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.PATIENT)
+  @Roles(Role.PATIENT, Role.NURSE, Role.DOCTOR)
   confirmStageArrival(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Param('station') station: string,
     @Query('ticketNumber') ticketNumber: string | undefined,
-    @Request() req: { user: { id: string } },
+    @Request() req: { user: { id: string; role: Role } },
   ) {
-    return this.receptionService.confirmStageArrival(id, req.user.id, station, ticketNumber);
+    return this.receptionService.confirmStageArrival(id, req.user, station, ticketNumber);
   }
 
   @Post(':id/triage/start')
@@ -174,6 +161,41 @@ export class VisitController {
     return this.receptionService.getTriageQueue();
   }
 
+  @Get('reception/desk')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.RECEPTIONIST)
+  @ApiBearerAuth()
+  getReceptionDesk(@Request() req: { user: { id: string } }) {
+    return this.receptionService.getReceptionDesk(req.user.id);
+  }
+
+  @Post('reception/desk/pause')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.RECEPTIONIST)
+  @ApiBearerAuth()
+  pauseReceptionDesk(@Request() req: { user: { id: string; role: Role } }) {
+    return this.receptionService.setReceptionDeskAvailability(req.user, false);
+  }
+
+  @Post('reception/desk/resume')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.RECEPTIONIST)
+  @ApiBearerAuth()
+  resumeReceptionDesk(@Request() req: { user: { id: string; role: Role } }) {
+    return this.receptionService.setReceptionDeskAvailability(req.user, true);
+  }
+
+  @Put(':id/reception/start-verification')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.RECEPTIONIST)
+  @ApiBearerAuth()
+  startReceptionVerification(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Request() req: { user: { id: string; role: Role } },
+  ) {
+    return this.receptionService.startVerification(id, req.user);
+  }
+
   @Post('reception/call-next')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.RECEPTIONIST)
@@ -204,7 +226,7 @@ export class VisitController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.RECEPTIONIST)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Reception temporarily skips an active hall ticket' })
+  @ApiOperation({ summary: 'Reception temporarily skips a waiting or called hall ticket' })
   pauseHallTicket(@Param('id') id: string, @Body() dto: PauseHallTicketDto, @Request() req: any) {
     return this.receptionService.pauseHallTicket(id, dto, req.user);
   }
@@ -297,7 +319,7 @@ export class VisitController {
 
   @Post(':id/reissue')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.PATIENT, Role.NURSE, Role.RECEPTIONIST)
+  @Roles(Role.NURSE, Role.RECEPTIONIST)
   @ApiBearerAuth()
   reissueTicket(
     @Param('id') id: string,

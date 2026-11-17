@@ -34,6 +34,9 @@ export class User extends BaseEntity {
   @Column({ type: 'varchar', length: 10, nullable: true })
   gender?: string;
 
+  @Column({ type: 'boolean', default: false })
+  isPregnant: boolean;
+
   @Column({ type: 'date', nullable: true })
   dateOfBirth?: Date;
 

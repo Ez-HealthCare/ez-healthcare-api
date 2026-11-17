@@ -15,7 +15,6 @@ export const DEPARTMENT_CODES = {
 
 export const VN_OFFSET_MS = 7 * 60 * 60 * 1000;
 export const ELDERLY_PRIORITY_AGE = 80;
-export const MAX_PATIENT_HALL_REISSUES = 1;
 export const MAX_QUEUE_CALL_ATTEMPTS = 3;
 export const BUSINESS_TIME_ZONE = 'Asia/Ho_Chi_Minh';
 export const BUSINESS_WINDOWS = [{ start: '00:00', end: '24:00' }] as const;

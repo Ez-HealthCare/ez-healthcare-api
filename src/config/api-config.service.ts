@@ -111,6 +111,10 @@ export class ApiConfigService {
     return windows;
   }
 
+  get receptionDeskShiftsEnabled() {
+    return this.boolean('RECEPTION_DESK_SHIFTS_ENABLED');
+  }
+
   get receptionEta() {
     if (!this.boolean('RECEPTION_ETA_ENABLED')) return undefined;
     return {
@@ -136,6 +140,7 @@ export class ApiConfigService {
     void this.otpDelivery;
     void this.queueIssuanceWindows;
     void this.receptionEta;
+    void this.receptionDeskShiftsEnabled;
     void this.downstreamEta;
   }
 

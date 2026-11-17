@@ -2,6 +2,7 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   ArrayMaxSize,
   IsArray,
+  IsBoolean,
   IsDateString,
   IsNotEmpty,
   IsOptional,
@@ -26,6 +27,10 @@ export class UpdateMyProfileDto {
   @IsNotEmpty()
   @MaxLength(10)
   gender: string;
+
+  @IsOptional()
+  @IsBoolean()
+  isPregnant?: boolean;
 
   @ApiProperty({ example: '0901234567' })
   @IsString()

@@ -1,10 +1,18 @@
-import { Injectable, OnModuleDestroy, ServiceUnavailableException } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  OnModuleDestroy,
+  OnModuleInit,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { randomBytes } from 'node:crypto';
 import type { Server } from 'node:http';
 import type { RequestHandler } from 'express';
 import { WebSocket, WebSocketServer } from 'ws';
 import { API_PREFIX } from '../common/constants/app.constants';
 import { Role } from '../user/enums/role.enum';
+import { ApiConfigService } from '../config/api-config.service';
+import { ReceptionService } from './reception.service';
 
 const PATH = '/' + API_PREFIX + '/reception/live';
 const PROTOCOL = 'reception-live';
@@ -19,12 +27,53 @@ const CLINIC_MUTATION =
   /^\/visits\/[^/]+\/(assign-clinic|station-arrival\/clinic|call|start-exam|report-return|requeue|transfer|orders|conclusion)$/;
 
 const POST_MUTATION =
-  /^\/visits\/(hall-ticket|reception\/(walk-in|call-next)|[^/]+\/(reissue|emergency-dispatch))$|^\/appointments\/[^/]+\/reception\/check-in$|^\/reception-requests\/reception\/[^/]+\/confirm$/;
+  /^\/visits\/(hall-ticket|reception\/(walk-in|call-next|desk\/(pause|resume))|[^/]+\/(reissue|emergency-dispatch))$|^\/appointments\/[^/]+\/reception\/check-in$|^\/reception-requests\/reception\/[^/]+\/confirm$/;
 const PUT_MUTATION =
-  /^\/visits\/[^/]+\/(reception\/(call|pause|recall)|verify|reject-verification)$/;
+  /^\/visits\/[^/]+\/(reception\/(call|pause|recall|start-verification)|verify|reject-verification)$/;
 
 @Injectable()
-export class ReceptionRealtimeService implements OnModuleDestroy {
+export class ReceptionRealtimeService implements OnModuleInit, OnModuleDestroy {
+  private readonly logger = new Logger(ReceptionRealtimeService.name);
+  private etaTimer?: NodeJS.Timeout;
+  private refreshingEta = false;
+
+  constructor(
+    private readonly reception: ReceptionService,
+    private readonly config: ApiConfigService,
+  ) {}
+
+  onModuleInit() {
+    if (!this.config.receptionEta) return;
+    this.etaTimer = setInterval(() => void this.refreshWaitingEta(), 15_000);
+    this.etaTimer.unref();
+    void this.refreshWaitingEta();
+  }
+
+  private async refreshWaitingEta() {
+    if (this.refreshingEta) return;
+    this.refreshingEta = true;
+    try {
+      if (await this.reception.refreshEtaHistory()) {
+        for (const client of this.websocket.clients) {
+          if (
+            this.roles.get(client) === Role.PATIENT &&
+            client.readyState === WebSocket.OPEN &&
+            client.bufferedAmount < 1024
+          ) {
+            client.send(UPDATE);
+          }
+        }
+      }
+    } catch (error) {
+      this.logger.error(
+        'Could not refresh reception ETA history',
+        error instanceof Error ? error.stack : undefined,
+      );
+    } finally {
+      this.refreshingEta = false;
+    }
+  }
+
   private readonly grants = new Map<string, { expiry: number; role: Role }>();
   private readonly roles = new WeakMap<WebSocket, Role>();
   private readonly websocket = new WebSocketServer({
@@ -109,6 +158,7 @@ export class ReceptionRealtimeService implements OnModuleDestroy {
   };
 
   onModuleDestroy() {
+    clearInterval(this.etaTimer);
     for (const client of this.websocket.clients) client.terminate();
     this.websocket.close();
     this.grants.clear();

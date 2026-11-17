@@ -23,6 +23,7 @@ import {
 } from './enums/queue-ticket.enum';
 import { VisitStatus } from './enums/visit-status.enum';
 import { QueueTicketService } from './queue-ticket.service';
+import { compareReadyQueue } from './ready-queue';
 
 @Injectable()
 export class ClinicQueueService {
@@ -164,6 +165,7 @@ export class ClinicQueueService {
         isPriority: v.isPriority,
         priorityReason: v.priorityReason,
         queuedAt: ticket?.queuedAt || v.updatedAt,
+        clinicArrivedAt: undefined,
         callAttempts: ticket?.callAttempts || 0,
         vitals: v.vital
           ? {
@@ -190,6 +192,16 @@ export class ClinicQueueService {
       const rankA = statusPriority[a.status] ?? 99;
       const rankB = statusPriority[b.status] ?? 99;
       if (rankA !== rankB) return rankA - rankB;
+      if (
+        this.config.downstreamEta &&
+        a.status === VisitStatus.CLINIC_WAITING &&
+        b.status === VisitStatus.CLINIC_WAITING
+      ) {
+        return compareReadyQueue(
+          { ...a, readyAt: a.clinicArrivedAt },
+          { ...b, readyAt: b.clinicArrivedAt },
+        );
+      }
       if (b.isPriority !== a.isPriority) return Number(b.isPriority) - Number(a.isPriority);
       return new Date(a.queuedAt).getTime() - new Date(b.queuedAt).getTime();
     });
@@ -267,6 +279,45 @@ export class ClinicQueueService {
           'ROOM_ACCESS_DENIED',
           'Only the calling doctor may recall this patient.',
         );
+      if (this.config.downstreamEta && visit.status === VisitStatus.CLINIC_WAITING) {
+        const roomTickets = await manager.getRepository(QueueTicket).find({
+          where: {
+            kind: QueueTicketKind.CLINIC,
+            scopeKey: ticket.scopeKey,
+            businessDate: ticket.businessDate,
+            status: QueueTicketStatus.ACTIVE,
+          },
+          relations: { visit: true },
+        });
+        if (roomTickets.some((entry) => entry.visit.status === VisitStatus.CLINIC_CALLED)) {
+          throw clinicalConflict('ROOM_BUSY', 'A patient has already been called to this room.');
+        }
+        const next = roomTickets
+          .filter(
+            (entry) =>
+              entry.visit.status === VisitStatus.CLINIC_WAITING && entry.visit.clinicArrivedAt,
+          )
+          .sort((a, b) =>
+            compareReadyQueue(
+              {
+                visitId: a.visitId,
+                isPriority: a.visit.isPriority,
+                readyAt: a.visit.clinicArrivedAt,
+              },
+              {
+                visitId: b.visitId,
+                isPriority: b.visit.isPriority,
+                readyAt: b.visit.clinicArrivedAt,
+              },
+            ),
+          )[0];
+        if (next?.visitId !== id) {
+          throw clinicalConflict(
+            'VISIT_STATE_CONFLICT',
+            'Call the next eligible patient who has arrived.',
+          );
+        }
+      }
       if (ticket.callAttempts === 0) visit.returnReportedAt = null;
       ticket.callAttempts += 1;
       ticket.lastCalledAt = new Date();
