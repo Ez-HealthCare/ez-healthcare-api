@@ -183,6 +183,31 @@ describe('AuthService (production implementation)', () => {
     expect(otps.save).not.toHaveBeenCalled();
   });
 
+  it('formats payload for Resend API when delivery URL is on resend.com', async () => {
+    const resendService = new AuthService(
+      users,
+      otps,
+      new JwtService({ secret: 'test-secret', signOptions: { expiresIn: '15m' } }),
+      sessions,
+      new ApiConfigService(
+        new ConfigService({
+          OTP_DELIVERY_URL: 'https://api.resend.com/emails',
+          OTP_FROM: 'onboarding@resend.dev',
+          OTP_DELIVERY_AUTH: 're_mock_key',
+        }),
+      ),
+    );
+    await resendService.requestPatientOtp({ email: 'patient2@example.com' });
+    const call = delivery.mock.calls.at(-1) as any;
+    expect(call[0]).toBe('https://api.resend.com/emails');
+    expect(call[1].headers.Authorization).toBe('Bearer re_mock_key');
+    const sent = JSON.parse(String(call[1].body));
+    expect(sent.from).toBe('Ez-HealthCare <onboarding@resend.dev>');
+    expect(sent.to).toEqual(['patient2@example.com']);
+    expect(sent.subject).toBe('Ez-HealthCare - Ma dang nhap');
+    expect(sent.text).toMatch(/\d{6}/);
+  });
+
   function pendingOtp() {
     otp = {
       id: 'otp-1',

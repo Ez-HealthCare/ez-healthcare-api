@@ -67,14 +67,24 @@ export class AuthService {
       if (!deliveryUrl) {
         throw new ServiceUnavailableException('Email delivery is not configured.');
       }
-      try {
-        const response = await fetch(deliveryUrl, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(delivery.authorization ? { Authorization: delivery.authorization } : {}),
-          },
-          body: JSON.stringify({
+      const isResend = deliveryUrl.includes('resend.com');
+      const authHeader = delivery.authorization
+        ? delivery.authorization.startsWith('Bearer ')
+          ? delivery.authorization
+          : `Bearer ${delivery.authorization}`
+        : undefined;
+
+      const body = isResend
+        ? {
+            from: `Ez-HealthCare <${delivery.from}>`,
+            to: [email],
+            subject: 'Ez-HealthCare - Ma dang nhap',
+            text:
+              'Ma dang nhap cua ban: ' +
+              otpCode +
+              `. Ma co hieu luc trong ${OTP_LIFETIME_MS / 60_000} phut. Khong chia se ma nay.`,
+          }
+        : {
             From: {
               Email: delivery.from,
               Name: 'Ez-HealthCare',
@@ -85,7 +95,16 @@ export class AuthService {
               'Ma dang nhap cua ban: ' +
               otpCode +
               `. Ma co hieu luc trong ${OTP_LIFETIME_MS / 60_000} phut. Khong chia se ma nay.`,
-          }),
+          };
+
+      try {
+        const response = await fetch(deliveryUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(authHeader ? { Authorization: authHeader } : {}),
+          },
+          body: JSON.stringify(body),
           signal: AbortSignal.timeout(OTP_DELIVERY_TIMEOUT_MS),
         });
         if (!response.ok) throw new Error('Email delivery failed');
