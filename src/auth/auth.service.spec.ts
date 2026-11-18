@@ -290,4 +290,42 @@ describe('AuthService (production implementation)', () => {
     );
     expect((cookie.mock.calls[3] as any)[2]).toHaveProperty('expires');
   });
+
+  it('allows unified login with email and password for any active role including Patient', async () => {
+    user = {
+      id: 'patient-login-id',
+      email: 'patient@example.com',
+      password: await bcrypt.hash('Patient@123', 10),
+      role: Role.PATIENT,
+      isActive: true,
+    } as any;
+    const result = await service.login({ email: 'patient@example.com', password: 'Patient@123' });
+    expect(result.accessToken).toBeDefined();
+    expect(new JwtService({ secret: 'test-secret' }).verify(result.accessToken).role).toBe(
+      Role.PATIENT,
+    );
+  });
+
+  it('registers a patient account as inactive, sends verification OTP, and activates upon verification', async () => {
+    user = undefined;
+    otp = undefined;
+    const regResult = await service.registerPatient({
+      email: 'newpatient@example.com',
+      password: 'Password@123',
+      name: 'New Patient',
+      phone: '0912345678',
+    });
+    expect(regResult.success).toBe(true);
+    expect(user).toBeDefined();
+    expect(user.isActive).toBe(false);
+
+    // Verify registration OTP
+    otp.otpCode = digest('654321');
+    const verifyResult = await service.verifyPatientRegistration({
+      email: 'newpatient@example.com',
+      otpCode: '654321',
+    });
+    expect(verifyResult.accessToken).toBeDefined();
+    expect(user.isActive).toBe(true);
+  });
 });

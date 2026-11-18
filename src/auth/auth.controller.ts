@@ -16,6 +16,9 @@ import { ApiConfigService } from '../config/api-config.service';
 import { RequestOtpDto } from './dto/request-otp.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { LoginStaffDto } from './dto/login-staff.dto';
+import { LoginDto } from './dto/login.dto';
+import { RegisterPatientDto } from './dto/register-patient.dto';
+import { VerifyRegisterDto } from './dto/verify-register.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { clearSessionCookies, readCookie, setSessionCookies } from './auth.config';
 import {
@@ -50,6 +53,27 @@ export class AuthController {
   @ApiOperation({ summary: 'Verify patient OTP and create an HttpOnly cookie session' })
   async verifyOtp(@Body() dto: VerifyOtpDto, @Res({ passthrough: true }) res: Response) {
     return this.sendSession(res, await this.authService.verifyPatientOtp(dto));
+  }
+
+  @Post(AUTH_PATHS.LOGIN)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Authenticate any role (Patient or Staff) with email and password' })
+  async login(@Body() dto: LoginDto, @Res({ passthrough: true }) res: Response) {
+    return this.sendSession(res, await this.authService.login(dto));
+  }
+
+  @Post(AUTH_PATHS.REGISTER_PATIENT)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Register a new patient account and send verification OTP' })
+  registerPatient(@Body() dto: RegisterPatientDto) {
+    return this.authService.registerPatient(dto);
+  }
+
+  @Post(AUTH_PATHS.VERIFY_REGISTER)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Verify patient registration OTP and create an authenticated session' })
+  async verifyRegister(@Body() dto: VerifyRegisterDto, @Res({ passthrough: true }) res: Response) {
+    return this.sendSession(res, await this.authService.verifyPatientRegistration(dto));
   }
 
   @Post(AUTH_PATHS.STAFF_LOGIN)

@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   HttpException,
   Injectable,
   ServiceUnavailableException,
@@ -18,6 +19,9 @@ import { AuthSession } from './entities/auth-session.entity';
 import { RequestOtpDto } from './dto/request-otp.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { LoginStaffDto } from './dto/login-staff.dto';
+import { LoginDto } from './dto/login.dto';
+import { RegisterPatientDto } from './dto/register-patient.dto';
+import { VerifyRegisterDto } from './dto/verify-register.dto';
 import { toMeResponse } from '../common/dto/response.dto';
 import {
   ACCESS_SECONDS,
@@ -49,6 +53,62 @@ export class AuthService {
     private readonly config: ApiConfigService,
   ) {}
 
+  private async sendOtpMail(
+    email: string,
+    otpCode: string,
+    subject = 'Ez-HealthCare - Ma dang nhap',
+  ) {
+    const delivery = this.config.otpDelivery;
+    const deliveryUrl = delivery.url;
+    if (!deliveryUrl) {
+      throw new ServiceUnavailableException('Email delivery is not configured.');
+    }
+    const isResend = deliveryUrl.includes('resend.com');
+    const authHeader = delivery.authorization
+      ? delivery.authorization.startsWith('Bearer ')
+        ? delivery.authorization
+        : `Bearer ${delivery.authorization}`
+      : undefined;
+
+    const body = isResend
+      ? {
+          from: `Ez-HealthCare <${delivery.from}>`,
+          to: [email],
+          subject,
+          text:
+            'Ma xac thuc cua ban: ' +
+            otpCode +
+            `. Ma co hieu luc trong ${OTP_LIFETIME_MS / 60_000} phut. Khong chia se ma nay.`,
+        }
+      : {
+          From: {
+            Email: delivery.from,
+            Name: 'Ez-HealthCare',
+          },
+          To: [{ Email: email }],
+          Subject: subject,
+          Text:
+            'Ma dang nhap cua ban: ' +
+            otpCode +
+            `. Ma co hieu luc trong ${OTP_LIFETIME_MS / 60_000} phut. Khong chia se ma nay.`,
+        };
+
+    try {
+      const response = await fetch(deliveryUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(authHeader ? { Authorization: authHeader } : {}),
+        },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(OTP_DELIVERY_TIMEOUT_MS),
+      });
+      if (!response.ok) throw new Error('Email delivery failed');
+    } catch {
+      throw new ServiceUnavailableException('Unable to send OTP. Please try again later.');
+    }
+  }
+
   async requestPatientOtp(dto: RequestOtpDto) {
     const email = dto.email.trim().toLowerCase();
     await this.otps.manager.transaction(async (manager) => {
@@ -62,55 +122,7 @@ export class AuthService {
         throw new HttpException(OTP_RESEND_MESSAGE, 429);
       }
       const otpCode = randomInt(OTP_MIN_VALUE, OTP_MAX_EXCLUSIVE).toString();
-      const delivery = this.config.otpDelivery;
-      const deliveryUrl = delivery.url;
-      if (!deliveryUrl) {
-        throw new ServiceUnavailableException('Email delivery is not configured.');
-      }
-      const isResend = deliveryUrl.includes('resend.com');
-      const authHeader = delivery.authorization
-        ? delivery.authorization.startsWith('Bearer ')
-          ? delivery.authorization
-          : `Bearer ${delivery.authorization}`
-        : undefined;
-
-      const body = isResend
-        ? {
-            from: `Ez-HealthCare <${delivery.from}>`,
-            to: [email],
-            subject: 'Ez-HealthCare - Ma dang nhap',
-            text:
-              'Ma dang nhap cua ban: ' +
-              otpCode +
-              `. Ma co hieu luc trong ${OTP_LIFETIME_MS / 60_000} phut. Khong chia se ma nay.`,
-          }
-        : {
-            From: {
-              Email: delivery.from,
-              Name: 'Ez-HealthCare',
-            },
-            To: [{ Email: email }],
-            Subject: 'Ez-HealthCare - Ma dang nhap',
-            Text:
-              'Ma dang nhap cua ban: ' +
-              otpCode +
-              `. Ma co hieu luc trong ${OTP_LIFETIME_MS / 60_000} phut. Khong chia se ma nay.`,
-          };
-
-      try {
-        const response = await fetch(deliveryUrl, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(authHeader ? { Authorization: authHeader } : {}),
-          },
-          body: JSON.stringify(body),
-          signal: AbortSignal.timeout(OTP_DELIVERY_TIMEOUT_MS),
-        });
-        if (!response.ok) throw new Error('Email delivery failed');
-      } catch {
-        throw new ServiceUnavailableException('Unable to send OTP. Please try again later.');
-      }
+      await this.sendOtpMail(email, otpCode);
       await repo.save(
         repo.create({
           email,
@@ -189,6 +201,122 @@ export class AuthService {
       throw new UnauthorizedException('Invalid email or password.');
     }
     return this.createSession(user, dto.rememberMe === true);
+  }
+
+  async login(dto: LoginDto) {
+    const email = dto.email.trim().toLowerCase();
+    const user = await this.users
+      .createQueryBuilder('user')
+      .addSelect('user.password')
+      .where('user.email = :email', { email })
+      .getOne();
+    if (!user?.password || !user.isActive || !(await bcrypt.compare(dto.password, user.password))) {
+      throw new UnauthorizedException('Email hoặc mật khẩu không chính xác.');
+    }
+    return this.createSession(user, dto.rememberMe === true);
+  }
+
+  async registerPatient(dto: RegisterPatientDto) {
+    const email = dto.email.trim().toLowerCase();
+    const existing = await this.users.findOne({ where: { email } });
+    if (existing && existing.isActive && existing.password) {
+      throw new ConflictException('Email này đã được đăng ký tài khoản.');
+    }
+
+    const hashedPassword = await bcrypt.hash(dto.password, 10);
+
+    await this.otps.manager.transaction(async (manager) => {
+      await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', [email]);
+      const userRepo = manager.getRepository(User);
+      let user = await userRepo.findOne({ where: { email } });
+      if (!user) {
+        user = userRepo.create({
+          email,
+          password: hashedPassword,
+          name: dto.name || email.split('@')[0],
+          phone: dto.phone,
+          role: Role.PATIENT,
+          isActive: false,
+        });
+      } else {
+        user.password = hashedPassword;
+        user.name = dto.name || user.name || email.split('@')[0];
+        if (dto.phone) user.phone = dto.phone;
+        user.role = Role.PATIENT;
+        user.isActive = false;
+      }
+      await userRepo.save(user);
+
+      const otpRepo = manager.getRepository(PatientOtp);
+      const previous = await otpRepo.findOne({ where: { email }, order: { createdAt: 'DESC' } });
+      if (previous?.lockedUntil && previous.lockedUntil > new Date()) {
+        throw new HttpException(OTP_LOCKED_MESSAGE, 429);
+      }
+      if (previous && Date.now() - previous.createdAt.getTime() < OTP_RESEND_DELAY_MS) {
+        throw new HttpException(OTP_RESEND_MESSAGE, 429);
+      }
+      const otpCode = randomInt(OTP_MIN_VALUE, OTP_MAX_EXCLUSIVE).toString();
+      await this.sendOtpMail(email, otpCode, 'Ez-HealthCare - Ma xac thuc dang ky');
+
+      await otpRepo.save(
+        otpRepo.create({
+          email,
+          otpCode: hash(otpCode),
+          expiresAt: new Date(Date.now() + OTP_LIFETIME_MS),
+          failedAttempts: 0,
+          isUsed: false,
+          lockedUntil: null,
+        }),
+      );
+    });
+
+    return {
+      success: true,
+      message: 'Mã OTP xác thực đã được gửi đến email của bạn.',
+      retryAfterSeconds: OTP_RESEND_SECONDS,
+    };
+  }
+
+  async verifyPatientRegistration(dto: VerifyRegisterDto) {
+    const email = dto.email.trim().toLowerCase();
+    const outcome = await this.otps.manager.transaction(async (manager) => {
+      await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', [email]);
+      const repo = manager.getRepository(PatientOtp);
+      const record = await repo.findOne({ where: { email }, order: { createdAt: 'DESC' } });
+      if (!record || record.isUsed)
+        return new BadRequestException('Không tìm thấy yêu cầu xác thực OTP.');
+      if (record.lockedUntil && record.lockedUntil > new Date()) {
+        return new HttpException(OTP_LOCKED_MESSAGE, 429);
+      }
+      if (record.expiresAt <= new Date()) return new BadRequestException('Mã OTP đã hết hạn.');
+
+      if (record.otpCode !== hash(dto.otpCode)) {
+        record.failedAttempts += 1;
+        if (record.failedAttempts >= OTP_MAX_ATTEMPTS) {
+          record.lockedUntil = new Date(Date.now() + OTP_LOCKOUT_MS);
+        }
+        await repo.save(record);
+        return record.failedAttempts >= OTP_MAX_ATTEMPTS
+          ? new HttpException(OTP_LOCKED_MESSAGE, 429)
+          : new BadRequestException('Mã OTP không chính xác.');
+      }
+
+      const userRepo = manager.getRepository(User);
+      const user = await userRepo.findOne({ where: { email } });
+      if (!user) {
+        return new BadRequestException('Không tìm thấy hồ sơ đăng ký.');
+      }
+      user.isActive = true;
+      await userRepo.save(user);
+
+      record.isUsed = true;
+      await repo.save(record);
+      return user;
+    });
+
+    if (outcome instanceof HttpException) throw outcome;
+    if (outcome instanceof Error) throw outcome;
+    return this.createSession(outcome, dto.rememberMe === true);
   }
 
   private async createSession(user: User, rememberMe: boolean) {

@@ -11,6 +11,9 @@ export const ROLES_KEY = 'roles';
 export const AUTH_CONTROLLER_PATH = 'auth';
 export const AUTH_PATHS = {
   STAFF_LOGIN: 'staff/login',
+  LOGIN: 'login',
+  REGISTER_PATIENT: 'patient/register',
+  VERIFY_REGISTER: 'patient/verify-register',
   REQUEST_OTP: 'patient/request-otp',
   VERIFY_OTP: 'patient/verify-otp',
   REFRESH: 'refresh',
