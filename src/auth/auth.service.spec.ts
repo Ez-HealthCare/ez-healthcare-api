@@ -1,4 +1,9 @@
-import { BadRequestException, HttpException, UnauthorizedException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  HttpException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { jest } from '@jest/globals';
 import * as bcrypt from 'bcrypt';
@@ -33,11 +38,13 @@ describe('AuthService (production implementation)', () => {
     otp = undefined;
     session = undefined;
     users = {
-      findOne: jest
-        .fn<any>()
-        .mockImplementation(async ({ where }: any) =>
-          user && (!where.isActive || user.isActive) ? user : null,
-        ),
+      findOne: jest.fn<any>().mockImplementation(async ({ where }: any) => {
+        if (!user) return null;
+        if (where.email && where.email !== user.email) return null;
+        if (where.phone && where.phone !== user.phone) return null;
+        if (where.isActive !== undefined && where.isActive !== user.isActive) return null;
+        return user;
+      }),
       create: (value: any) => value,
       save: jest.fn<any>().mockImplementation(async (value: any) => {
         user = { id: '163e251b-adc5-4139-a464-f290ac8fbaef', ...value };
@@ -327,6 +334,7 @@ describe('AuthService (production implementation)', () => {
       service.verifyPatientOtp({ email: 'patient@example.com', otpCode: '123456' }),
     ).rejects.toBeInstanceOf(BadRequestException);
     otp.expiresAt = new Date(Date.now() + 60_000);
+    user.email = 'patient@example.com';
     await expect(
       service.verifyPatientOtp({ email: 'patient@example.com', otpCode: '123456' }),
     ).rejects.toBeInstanceOf(UnauthorizedException);
@@ -397,5 +405,41 @@ describe('AuthService (production implementation)', () => {
     });
     expect(verifyResult.accessToken).toBeDefined();
     expect(user.isActive).toBe(true);
+  });
+
+  it('rejects registration if email already exists', async () => {
+    user = {
+      id: 'existing-id',
+      email: 'existing@example.com',
+      isActive: true,
+    };
+    await expect(
+      service.registerPatient({
+        email: 'existing@example.com',
+        password: 'Password@123',
+        name: 'Existing Patient',
+      }),
+    ).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it('rejects registration if phone already exists', async () => {
+    user = {
+      id: 'existing-id',
+      email: 'other@example.com',
+      phone: '0912345678',
+      isActive: true,
+    };
+    users.findOne = jest.fn().mockImplementation(async ({ where }: any) => {
+      if (where.email === 'other@example.com' || where.phone === '0912345678') return user;
+      return null;
+    });
+    await expect(
+      service.registerPatient({
+        email: 'brandnew@example.com',
+        password: 'Password@123',
+        name: 'New Patient',
+        phone: '0912345678',
+      }),
+    ).rejects.toBeInstanceOf(ConflictException);
   });
 });

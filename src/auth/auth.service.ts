@@ -306,8 +306,15 @@ export class AuthService {
   async registerPatient(dto: RegisterPatientDto) {
     const email = dto.email.trim().toLowerCase();
     const existing = await this.users.findOne({ where: { email } });
-    if (existing && existing.isActive && existing.password) {
+    if (existing) {
       throw new ConflictException('Email này đã được đăng ký tài khoản.');
+    }
+
+    if (dto.phone?.trim()) {
+      const existingPhone = await this.users.findOne({ where: { phone: dto.phone.trim() } });
+      if (existingPhone) {
+        throw new ConflictException('Số điện thoại đã được đăng ký trong hệ thống.');
+      }
     }
 
     const hashedPassword = await bcrypt.hash(dto.password, 10);
@@ -316,23 +323,19 @@ export class AuthService {
     await this.otps.manager.transaction(async (manager) => {
       await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', [email]);
       const userRepo = manager.getRepository(User);
-      let user = await userRepo.findOne({ where: { email } });
-      if (!user) {
-        user = userRepo.create({
-          email,
-          password: hashedPassword,
-          name: dto.name || email.split('@')[0],
-          phone: dto.phone,
-          role: Role.PATIENT,
-          isActive: false,
-        });
-      } else {
-        user.password = hashedPassword;
-        user.name = dto.name || user.name || email.split('@')[0];
-        if (dto.phone) user.phone = dto.phone;
-        user.role = Role.PATIENT;
-        user.isActive = false;
+      const existingInTx = await userRepo.findOne({ where: { email } });
+      if (existingInTx) {
+        throw new ConflictException('Email này đã được đăng ký tài khoản.');
       }
+
+      const user = userRepo.create({
+        email,
+        password: hashedPassword,
+        name: dto.name || email.split('@')[0],
+        phone: dto.phone?.trim(),
+        role: Role.PATIENT,
+        isActive: false,
+      });
       await userRepo.save(user);
 
       const otpRepo = manager.getRepository(PatientOtp);
