@@ -23,6 +23,7 @@ import { LoginDto } from './dto/login.dto';
 import { RegisterPatientDto } from './dto/register-patient.dto';
 import { VerifyRegisterDto } from './dto/verify-register.dto';
 import { toMeResponse } from '../common/dto/response.dto';
+import nodemailer, { type Transporter } from 'nodemailer';
 import {
   ACCESS_SECONDS,
   OTP_MIN_VALUE,
@@ -45,6 +46,8 @@ const hash = (value: string) => createHash('sha256').update(value).digest('hex')
 
 @Injectable()
 export class AuthService {
+  private smtpTransporter?: Transporter;
+
   constructor(
     @InjectRepository(User) private readonly users: Repository<User>,
     @InjectRepository(PatientOtp) private readonly otps: Repository<PatientOtp>,
@@ -58,6 +61,61 @@ export class AuthService {
     otpCode: string,
     subject = 'Ez-HealthCare - Ma dang nhap',
   ) {
+    const minutes = OTP_LIFETIME_MS / 60_000;
+    const smtp = this.config.smtp;
+
+    // 1. Prioritize SMTP delivery (e.g. Gmail App Password) if configured
+    if (smtp.enabled) {
+      if (!this.smtpTransporter) {
+        this.smtpTransporter = nodemailer.createTransport({
+          host: smtp.host,
+          port: smtp.port,
+          secure: smtp.secure,
+          auth: {
+            user: smtp.user,
+            pass: smtp.pass,
+          },
+        });
+      }
+
+      try {
+        await this.smtpTransporter.sendMail({
+          from: smtp.from,
+          to: email,
+          subject,
+          text: `Mã xác thực của bạn: ${otpCode}. Mã có hiệu lực trong ${minutes} phút. Không chia sẻ mã này cho bất kỳ ai.`,
+          html: `
+            <div style="font-family: Arial, sans-serif; max-width: 540px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 12px; background-color: #ffffff;">
+              <div style="text-align: center; margin-bottom: 20px;">
+                <h2 style="color: #00685f; margin: 0; font-size: 24px; font-weight: 700;">Ez-HealthCare</h2>
+                <p style="color: #64748b; font-size: 13px; margin: 4px 0 0;">Cổng thông tin &amp; Hồ sơ bệnh án điện tử</p>
+              </div>
+              <p style="font-size: 15px; color: #1e293b;">Xin chào,</p>
+              <p style="font-size: 15px; color: #1e293b; line-height: 1.5;">Bạn đang thực hiện thao tác xác thực trên hệ thống Ez-HealthCare. Mã xác thực (OTP) của bạn là:</p>
+              <div style="text-align: center; margin: 24px 0;">
+                <span style="font-size: 32px; font-weight: 700; letter-spacing: 6px; color: #00685f; background: #e6f4f2; padding: 12px 28px; border-radius: 10px; display: inline-block;">
+                  ${otpCode}
+                </span>
+              </div>
+              <p style="color: #64748b; font-size: 13px; line-height: 1.5;">
+                Mã xác thực này có hiệu lực trong vòng <strong>${minutes} phút</strong>. Tuyệt đối không chia sẻ mã này với bất kỳ ai để bảo mật thông tin tài khoản của bạn.
+              </p>
+              <hr style="border: none; border-top: 1px solid #f1f5f9; margin: 24px 0 16px;" />
+              <p style="color: #94a3b8; font-size: 12px; text-align: center; margin: 0;">
+                Đây là email tự động từ hệ thống Ez-HealthCare. Vui lòng không trả lời thư này.
+              </p>
+            </div>
+          `,
+        });
+        return;
+      } catch {
+        throw new ServiceUnavailableException(
+          'Unable to send OTP via SMTP. Please try again later.',
+        );
+      }
+    }
+
+    // 2. Fallback to HTTP delivery (Resend / Mailpit) if SMTP is not configured
     const delivery = this.config.otpDelivery;
     const deliveryUrl = delivery.url;
     if (!deliveryUrl) {

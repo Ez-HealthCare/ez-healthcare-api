@@ -9,6 +9,7 @@ import { User } from '../database/entities/user.entity';
 import { setSessionCookies } from './auth.config';
 import { ConfigService } from '@nestjs/config';
 import { ApiConfigService } from '../config/api-config.service';
+import nodemailer from 'nodemailer';
 import type { Response } from 'express';
 
 describe('AuthService (production implementation)', () => {
@@ -206,6 +207,46 @@ describe('AuthService (production implementation)', () => {
     expect(sent.to).toEqual(['patient2@example.com']);
     expect(sent.subject).toBe('Ez-HealthCare - Ma dang nhap');
     expect(sent.text).toMatch(/\d{6}/);
+  });
+
+  it('delivers OTP via SMTP when configured', async () => {
+    const sendMailMock = jest.fn().mockResolvedValue({ messageId: 'msg-1' } as never);
+    jest.spyOn(nodemailer, 'createTransport').mockReturnValue({
+      sendMail: sendMailMock,
+    } as any);
+
+    const smtpConfig = {
+      otpDelivery: { url: undefined, from: 'smtp@test.com' },
+      smtp: {
+        enabled: true,
+        host: 'smtp.gmail.com',
+        port: 465,
+        secure: true,
+        user: 'mygmail@gmail.com',
+        pass: 'app-password',
+        from: 'Ez-HealthCare <mygmail@gmail.com>',
+      },
+    } as unknown as ApiConfigService;
+
+    const smtpService = new AuthService(
+      users,
+      otps,
+      new JwtService({ secret: 'test-secret', signOptions: { expiresIn: '15m' } }),
+      sessions,
+      smtpConfig,
+    );
+
+    await smtpService.requestPatientOtp({ email: 'target@example.com' });
+    expect(sendMailMock).toHaveBeenCalledTimes(1);
+    expect(sendMailMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        from: 'Ez-HealthCare <mygmail@gmail.com>',
+        to: 'target@example.com',
+        subject: 'Ez-HealthCare - Ma dang nhap',
+        text: expect.stringMatching(/\d{6}/),
+        html: expect.stringContaining('Ez-HealthCare'),
+      }),
+    );
   });
 
   function pendingOtp() {

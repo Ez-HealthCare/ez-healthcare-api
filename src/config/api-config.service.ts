@@ -86,6 +86,27 @@ export class ApiConfigService {
     return { url: url || undefined, from, authorization: authorization || undefined };
   }
 
+  get smtp() {
+    const user = this.value('SMTP_USER').trim();
+    const pass = this.value('SMTP_PASS').trim();
+    const host = this.value('SMTP_HOST', 'smtp.gmail.com').trim();
+    const port = this.portNumber('SMTP_PORT', 465);
+    const secure = this.value('SMTP_SECURE', port === 465 ? 'true' : 'false') === 'true';
+    const from = this.value(
+      'SMTP_FROM',
+      user ? `Ez-HealthCare <${user}>` : OTP_DEFAULT_FROM,
+    ).trim();
+    return {
+      enabled: Boolean(user && pass),
+      host,
+      port,
+      secure,
+      user,
+      pass,
+      from,
+    };
+  }
+
   get queueIssuanceWindows() {
     const raw = this.value(
       'QUEUE_ISSUANCE_WINDOWS',
@@ -138,6 +159,7 @@ export class ApiConfigService {
     void this.jwtSecret;
     void this.corsOrigins;
     void this.otpDelivery;
+    void this.smtp;
     void this.queueIssuanceWindows;
     void this.receptionEta;
     void this.receptionDeskShiftsEnabled;
