@@ -34,14 +34,14 @@ export class UserController {
 
   @Get('me/profile')
   @Roles(Role.PATIENT)
-  @ApiOperation({ summary: 'Get the authenticated patient\'s full personal profile' })
+  @ApiOperation({ summary: "Get the authenticated patient's full personal profile" })
   async getMyProfile(@Request() req: any) {
     return toUserFull(await this.userService.getMyProfile(req.user.id));
   }
 
   @Put('me/profile')
   @Roles(Role.PATIENT)
-  @ApiOperation({ summary: 'Complete or update the authenticated patient\'s personal profile' })
+  @ApiOperation({ summary: "Complete or update the authenticated patient's personal profile" })
   async updateMyProfile(@Request() req: any, @Body() dto: UpdateMyProfileDto) {
     return toUserFull(await this.userService.updateMyProfile(req.user.id, dto));
   }

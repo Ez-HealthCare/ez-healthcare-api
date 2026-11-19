@@ -91,7 +91,14 @@ export class ReceptionRequestService {
       request.processedById = actor.id;
       await manager.getRepository(ReceptionRequest).save(request);
       await this.audit.log(
-        { action: 'CONVERT_RECEPTION_REQUEST_TO_VISIT', actorId: actor.id, actorRole: actor.role, targetEntityType: 'ReceptionRequest', targetEntityId: request.id, metadata: { visitId: issued.visit.id, hallTicketNumber: issued.visit.hallTicketNumber } },
+        {
+          action: 'CONVERT_RECEPTION_REQUEST_TO_VISIT',
+          actorId: actor.id,
+          actorRole: actor.role,
+          targetEntityType: 'ReceptionRequest',
+          targetEntityId: request.id,
+          metadata: { visitId: issued.visit.id, hallTicketNumber: issued.visit.hallTicketNumber },
+        },
         manager,
       );
       return this.queue.ticketResponse(issued.visit, issued.ticket);
@@ -116,7 +123,14 @@ export class ReceptionRequestService {
       request.processedById = actor.id;
       const saved = await manager.getRepository(ReceptionRequest).save(request);
       await this.audit.log(
-        { action: 'REJECT_RECEPTION_REQUEST', actorId: actor.id, actorRole: actor.role, targetEntityType: 'ReceptionRequest', targetEntityId: saved.id, metadata: { reason: saved.rejectionReason } },
+        {
+          action: 'REJECT_RECEPTION_REQUEST',
+          actorId: actor.id,
+          actorRole: actor.role,
+          targetEntityType: 'ReceptionRequest',
+          targetEntityId: saved.id,
+          metadata: { reason: saved.rejectionReason },
+        },
         manager,
       );
       return saved;

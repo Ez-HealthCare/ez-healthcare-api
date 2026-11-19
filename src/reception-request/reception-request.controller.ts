@@ -50,14 +50,14 @@ export class ReceptionRequestController {
 
   @Get('me/current')
   @Roles(Role.PATIENT)
-  @ApiOperation({ summary: 'Get the patient\'s current reception request, if any' })
+  @ApiOperation({ summary: "Get the patient's current reception request, if any" })
   getMyCurrent(@Request() req: any) {
     return this.requests.getMyCurrent(req.user.id);
   }
 
   @Put('me/draft')
   @Roles(Role.PATIENT)
-  @ApiOperation({ summary: 'Create or update the patient\'s incomplete reception request' })
+  @ApiOperation({ summary: "Create or update the patient's incomplete reception request" })
   saveDraft(@Request() req: any, @Body() dto: SaveReceptionRequestDraftDto) {
     return this.requests.saveDraft(req.user.id, dto);
   }
@@ -72,7 +72,7 @@ export class ReceptionRequestController {
 
   @Put('me/cancel')
   @Roles(Role.PATIENT)
-  @ApiOperation({ summary: 'Cancel the patient\'s active draft or pending request' })
+  @ApiOperation({ summary: "Cancel the patient's active draft or pending request" })
   cancelMyCurrent(@Request() req: any) {
     return this.requests.cancelMyCurrent(req.user.id);
   }

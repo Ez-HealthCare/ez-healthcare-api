@@ -21,7 +21,9 @@ export class NormalizeClinicalRelationColumns1792080000000 implements MigrationI
        ALTER COLUMN "visit_id" SET NOT NULL,
        ALTER COLUMN "doctor_id" SET NOT NULL`,
     );
-    await queryRunner.query(`ALTER TABLE "visit_orders" DROP COLUMN "visitId", DROP COLUMN "doctorId"`);
+    await queryRunner.query(
+      `ALTER TABLE "visit_orders" DROP COLUMN "visitId", DROP COLUMN "doctorId"`,
+    );
 
     await queryRunner.query(
       `UPDATE "visit_steps"
@@ -64,20 +66,26 @@ export class NormalizeClinicalRelationColumns1792080000000 implements MigrationI
        ALTER COLUMN "visit_id" SET NOT NULL,
        ALTER COLUMN "doctor_id" SET NOT NULL`,
     );
-    await queryRunner.query(`ALTER TABLE "prescriptions" DROP COLUMN "visitId", DROP COLUMN "doctorId"`);
+    await queryRunner.query(
+      `ALTER TABLE "prescriptions" DROP COLUMN "visitId", DROP COLUMN "doctorId"`,
+    );
 
     await queryRunner.query(
       `UPDATE "prescription_items"
        SET "prescription_id" = COALESCE("prescription_id", "prescriptionId")`,
     );
-    await queryRunner.query(`ALTER TABLE "prescription_items" ALTER COLUMN "prescription_id" SET NOT NULL`);
+    await queryRunner.query(
+      `ALTER TABLE "prescription_items" ALTER COLUMN "prescription_id" SET NOT NULL`,
+    );
     await queryRunner.query(`ALTER TABLE "prescription_items" DROP COLUMN "prescriptionId"`);
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`ALTER TABLE "prescription_items" ADD "prescriptionId" uuid`);
     await queryRunner.query(`UPDATE "prescription_items" SET "prescriptionId" = "prescription_id"`);
-    await queryRunner.query(`ALTER TABLE "prescription_items" ALTER COLUMN "prescriptionId" SET NOT NULL`);
+    await queryRunner.query(
+      `ALTER TABLE "prescription_items" ALTER COLUMN "prescriptionId" SET NOT NULL`,
+    );
 
     await queryRunner.query(`ALTER TABLE "prescriptions" ADD "visitId" uuid, ADD "doctorId" uuid`);
     await queryRunner.query(
@@ -110,7 +118,9 @@ export class NormalizeClinicalRelationColumns1792080000000 implements MigrationI
     );
 
     await queryRunner.query(`ALTER TABLE "visit_orders" ADD "visitId" uuid, ADD "doctorId" uuid`);
-    await queryRunner.query(`UPDATE "visit_orders" SET "visitId" = "visit_id", "doctorId" = "doctor_id"`);
+    await queryRunner.query(
+      `UPDATE "visit_orders" SET "visitId" = "visit_id", "doctorId" = "doctor_id"`,
+    );
     await queryRunner.query(
       `ALTER TABLE "visit_orders" ALTER COLUMN "visitId" SET NOT NULL, ALTER COLUMN "doctorId" SET NOT NULL`,
     );

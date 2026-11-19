@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       branch:
-        description: 'Branch to build and deploy (for example: feat-doctor)'
+        description: 'Branch to build and deploy (for example: feat-eta)'
         required: true
-        default: feat-doctor
+        default: feat-eta
         type: string
 
 permissions:

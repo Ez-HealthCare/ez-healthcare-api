@@ -30,7 +30,11 @@ export class AppointmentController {
 
   @Get('reception/today')
   @ApiOperation({ summary: 'Receptionist list of appointments scheduled today' })
-  @ApiQuery({ name: 'search', required: false, description: 'Appointment code, patient name, or CCCD' })
+  @ApiQuery({
+    name: 'search',
+    required: false,
+    description: 'Appointment code, patient name, or CCCD',
+  })
   @ApiQuery({ name: 'status', required: false, enum: AppointmentStatus })
   listToday(
     @Query('search') search?: string,

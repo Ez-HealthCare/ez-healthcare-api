@@ -1,11 +1,5 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import {
-  IsArray,
-  IsOptional,
-  IsString,
-  MaxLength,
-  ArrayMaxSize,
-} from 'class-validator';
+import { IsArray, IsOptional, IsString, MaxLength, ArrayMaxSize } from 'class-validator';
 
 /** Patient-editable fields. A draft is intentionally allowed to be incomplete. */
 export class SaveReceptionRequestDraftDto {
