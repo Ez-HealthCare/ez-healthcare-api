@@ -9,6 +9,7 @@ import { PatientOtp } from './entities/patient-otp.entity';
 import { AuthSession } from './entities/auth-session.entity';
 import { AuthService } from './auth.service';
 import { AuthController } from './auth.controller';
+import { BrevoMailService } from './brevo-mail.service';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { RolesGuard } from './guards/roles.guard';
 import { ACCESS_SECONDS } from '../common/constants/auth.constants';
@@ -28,7 +29,7 @@ import { ACCESS_SECONDS } from '../common/constants/auth.constants';
     }),
   ],
   controllers: [AuthController],
-  providers: [AuthService, JwtStrategy, RolesGuard],
-  exports: [AuthService, PassportModule, JwtModule, RolesGuard],
+  providers: [AuthService, BrevoMailService, JwtStrategy, RolesGuard],
+  exports: [AuthService, BrevoMailService, PassportModule, JwtModule, RolesGuard],
 })
 export class AuthModule {}

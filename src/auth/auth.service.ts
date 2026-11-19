@@ -3,6 +3,8 @@ import {
   ConflictException,
   HttpException,
   Injectable,
+  Logger,
+  Optional,
   ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -23,7 +25,7 @@ import { LoginDto } from './dto/login.dto';
 import { RegisterPatientDto } from './dto/register-patient.dto';
 import { VerifyRegisterDto } from './dto/verify-register.dto';
 import { toMeResponse } from '../common/dto/response.dto';
-import nodemailer, { type Transporter } from 'nodemailer';
+import { BrevoMailService } from './brevo-mail.service';
 import {
   ACCESS_SECONDS,
   OTP_MIN_VALUE,
@@ -46,7 +48,8 @@ const hash = (value: string) => createHash('sha256').update(value).digest('hex')
 
 @Injectable()
 export class AuthService {
-  private smtpTransporter?: Transporter;
+  private readonly logger = new Logger(AuthService.name);
+  private readonly brevoMail: BrevoMailService;
 
   constructor(
     @InjectRepository(User) private readonly users: Repository<User>,
@@ -54,121 +57,143 @@ export class AuthService {
     private readonly jwt: JwtService,
     @InjectRepository(AuthSession) private readonly sessions: Repository<AuthSession>,
     private readonly config: ApiConfigService,
-  ) {}
+    @Optional() brevoMail?: BrevoMailService,
+  ) {
+    this.brevoMail = brevoMail || new BrevoMailService(this.config);
+  }
 
   private async sendOtpMail(
     email: string,
     otpCode: string,
     subject = 'Ez-HealthCare - Ma dang nhap',
-  ) {
-    const minutes = OTP_LIFETIME_MS / 60_000;
-    const smtp = this.config.smtp;
+  ): Promise<{ sent: boolean; debugOtp?: string } | void> {
+    const minutes = Math.round(OTP_LIFETIME_MS / 60_000);
+    const htmlContent = `
+      <div style="font-family: Arial, sans-serif; max-width: 540px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 12px; background-color: #ffffff;">
+        <div style="text-align: center; margin-bottom: 20px;">
+          <h2 style="color: #00685f; margin: 0; font-size: 24px; font-weight: 700;">Ez-HealthCare</h2>
+          <p style="color: #64748b; font-size: 13px; margin: 4px 0 0;">Cổng thông tin &amp; Hồ sơ bệnh án điện tử</p>
+        </div>
+        <p style="font-size: 15px; color: #1e293b;">Xin chào,</p>
+        <p style="font-size: 15px; color: #1e293b; line-height: 1.5;">Bạn đang thực hiện thao tác xác thực trên hệ thống Ez-HealthCare. Mã xác thực (OTP) của bạn là:</p>
+        <div style="text-align: center; margin: 24px 0;">
+          <span style="font-size: 32px; font-weight: 700; letter-spacing: 6px; color: #00685f; background: #e6f4f2; padding: 12px 28px; border-radius: 10px; display: inline-block;">
+            ${otpCode}
+          </span>
+        </div>
+        <p style="color: #64748b; font-size: 13px; line-height: 1.5;">
+          Mã xác thực này có hiệu lực trong vòng <strong>${minutes} phút</strong>. Tuyệt đối không chia sẻ mã này với bất kỳ ai để bảo mật thông tin tài khoản của bạn.
+        </p>
+        <hr style="border: none; border-top: 1px solid #f1f5f9; margin: 24px 0 16px;" />
+        <p style="color: #94a3b8; font-size: 12px; text-align: center; margin: 0;">
+          Đây là email tự động từ hệ thống Ez-HealthCare. Vui lòng không trả lời thư này.
+        </p>
+      </div>
+    `;
 
-    // 1. Prioritize SMTP delivery (e.g. Gmail App Password) if configured
-    if (smtp.enabled) {
-      if (!this.smtpTransporter) {
-        this.smtpTransporter = nodemailer.createTransport({
-          host: smtp.host,
-          port: smtp.port,
-          secure: smtp.secure,
-          auth: {
-            user: smtp.user,
-            pass: smtp.pass,
-          },
-        });
-      }
-
+    // 1. Ưu tiên gửi qua Brevo REST API (HTTPS port 443)
+    if (this.config.brevo.enabled) {
       try {
-        await this.smtpTransporter.sendMail({
-          from: smtp.from,
+        await this.brevoMail.sendMail({
           to: email,
           subject,
-          text: `Mã xác thực của bạn: ${otpCode}. Mã có hiệu lực trong ${minutes} phút. Không chia sẻ mã này cho bất kỳ ai.`,
-          html: `
-            <div style="font-family: Arial, sans-serif; max-width: 540px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 12px; background-color: #ffffff;">
-              <div style="text-align: center; margin-bottom: 20px;">
-                <h2 style="color: #00685f; margin: 0; font-size: 24px; font-weight: 700;">Ez-HealthCare</h2>
-                <p style="color: #64748b; font-size: 13px; margin: 4px 0 0;">Cổng thông tin &amp; Hồ sơ bệnh án điện tử</p>
-              </div>
-              <p style="font-size: 15px; color: #1e293b;">Xin chào,</p>
-              <p style="font-size: 15px; color: #1e293b; line-height: 1.5;">Bạn đang thực hiện thao tác xác thực trên hệ thống Ez-HealthCare. Mã xác thực (OTP) của bạn là:</p>
-              <div style="text-align: center; margin: 24px 0;">
-                <span style="font-size: 32px; font-weight: 700; letter-spacing: 6px; color: #00685f; background: #e6f4f2; padding: 12px 28px; border-radius: 10px; display: inline-block;">
-                  ${otpCode}
-                </span>
-              </div>
-              <p style="color: #64748b; font-size: 13px; line-height: 1.5;">
-                Mã xác thực này có hiệu lực trong vòng <strong>${minutes} phút</strong>. Tuyệt đối không chia sẻ mã này với bất kỳ ai để bảo mật thông tin tài khoản của bạn.
-              </p>
-              <hr style="border: none; border-top: 1px solid #f1f5f9; margin: 24px 0 16px;" />
-              <p style="color: #94a3b8; font-size: 12px; text-align: center; margin: 0;">
-                Đây là email tự động từ hệ thống Ez-HealthCare. Vui lòng không trả lời thư này.
-              </p>
-            </div>
-          `,
+          htmlContent,
         });
-        return;
-      } catch {
+        return { sent: true };
+      } catch (err: unknown) {
+        // Chế độ fallback demo khi OTP_DEBUG=true
+        if (this.config.otpDebug) {
+          this.logger.warn(
+            `[CẢNH BÁO OTP_DEBUG] Gửi email qua Brevo thất bại (${(err as Error).message}), nhưng OTP_DEBUG=true đang bật. Kích hoạt fallback demo: OTP=${otpCode}`,
+          );
+          return { sent: false, debugOtp: otpCode };
+        }
+
+        // Nếu OTP_DEBUG=false hoặc không đặt: không bao giờ trả OTP trong response
+        if (err instanceof HttpException) {
+          throw err;
+        }
         throw new ServiceUnavailableException(
-          'Unable to send OTP via SMTP. Please try again later.',
+          `Không thể gửi mã OTP qua Brevo. ${(err as Error).message || 'Vui lòng thử lại sau.'}`,
         );
       }
     }
 
-    // 2. Fallback to HTTP delivery (Resend / Mailpit) if SMTP is not configured
+    // 2. Dự phòng qua HTTP delivery URL (Resend / Mailpit cho unit tests / local dev)
     const delivery = this.config.otpDelivery;
     const deliveryUrl = delivery.url;
-    if (!deliveryUrl) {
-      throw new ServiceUnavailableException('Email delivery is not configured.');
-    }
-    const isResend = deliveryUrl.includes('resend.com');
-    const authHeader = delivery.authorization
-      ? delivery.authorization.startsWith('Bearer ')
-        ? delivery.authorization
-        : `Bearer ${delivery.authorization}`
-      : undefined;
+    if (deliveryUrl) {
+      const isResend = deliveryUrl.includes('resend.com');
+      const authHeader = delivery.authorization
+        ? delivery.authorization.startsWith('Bearer ')
+          ? delivery.authorization
+          : `Bearer ${delivery.authorization}`
+        : undefined;
 
-    const body = isResend
-      ? {
-          from: `Ez-HealthCare <${delivery.from}>`,
-          to: [email],
-          subject,
-          text:
-            'Ma xac thuc cua ban: ' +
-            otpCode +
-            `. Ma co hieu luc trong ${OTP_LIFETIME_MS / 60_000} phut. Khong chia se ma nay.`,
-        }
-      : {
-          From: {
-            Email: delivery.from,
-            Name: 'Ez-HealthCare',
+      const body = isResend
+        ? {
+            from: `Ez-HealthCare <${delivery.from}>`,
+            to: [email],
+            subject,
+            text:
+              'Ma xac thuc cua ban: ' +
+              otpCode +
+              `. Ma co hieu luc trong ${OTP_LIFETIME_MS / 60_000} phut. Khong chia se ma nay.`,
+          }
+        : {
+            From: {
+              Email: delivery.from,
+              Name: 'Ez-HealthCare',
+            },
+            To: [{ Email: email }],
+            Subject: subject,
+            Text:
+              'Ma dang nhap cua ban: ' +
+              otpCode +
+              `. Ma co hieu luc trong ${OTP_LIFETIME_MS / 60_000} phut. Khong chia se ma nay.`,
+          };
+
+      try {
+        const response = await fetch(deliveryUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(authHeader ? { Authorization: authHeader } : {}),
           },
-          To: [{ Email: email }],
-          Subject: subject,
-          Text:
-            'Ma dang nhap cua ban: ' +
-            otpCode +
-            `. Ma co hieu luc trong ${OTP_LIFETIME_MS / 60_000} phut. Khong chia se ma nay.`,
-        };
-
-    try {
-      const response = await fetch(deliveryUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(authHeader ? { Authorization: authHeader } : {}),
-        },
-        body: JSON.stringify(body),
-        signal: AbortSignal.timeout(OTP_DELIVERY_TIMEOUT_MS),
-      });
-      if (!response.ok) throw new Error('Email delivery failed');
-    } catch {
-      throw new ServiceUnavailableException('Unable to send OTP. Please try again later.');
+          body: JSON.stringify(body),
+          signal: AbortSignal.timeout(OTP_DELIVERY_TIMEOUT_MS),
+        });
+        if (!response.ok) throw new Error('Email delivery failed');
+        return { sent: true };
+      } catch {
+        if (this.config.otpDebug) {
+          this.logger.warn(
+            `[CẢNH BÁO OTP_DEBUG] Gửi email qua HTTP Delivery thất bại, nhưng OTP_DEBUG=true đang bật. Kích hoạt fallback demo: OTP=${otpCode}`,
+          );
+          return { sent: false, debugOtp: otpCode };
+        }
+        throw new ServiceUnavailableException('Unable to send OTP. Please try again later.');
+      }
     }
+
+    // 3. Nếu không cấu hình cả Brevo lẫn HTTP URL
+    if (this.config.otpDebug) {
+      this.logger.warn(
+        `[CẢNH BÁO OTP_DEBUG] Chưa cấu hình dịch vụ email (BREVO_API_KEY/OTP_DELIVERY_URL), nhưng OTP_DEBUG=true đang bật. Kích hoạt fallback demo: OTP=${otpCode}`,
+      );
+      return { sent: false, debugOtp: otpCode };
+    }
+
+    this.logger.error(
+      'Dịch vụ gửi email chưa được cấu hình (thiếu BREVO_API_KEY và OTP_DELIVERY_URL).',
+    );
+    throw new ServiceUnavailableException('Chưa cấu hình dịch vụ gửi email (BREVO_API_KEY).');
   }
 
   async requestPatientOtp(dto: RequestOtpDto) {
     const email = dto.email.trim().toLowerCase();
+    let debugOtp: string | undefined;
+
     await this.otps.manager.transaction(async (manager) => {
       await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', [email]);
       const repo = manager.getRepository(PatientOtp);
@@ -180,7 +205,10 @@ export class AuthService {
         throw new HttpException(OTP_RESEND_MESSAGE, 429);
       }
       const otpCode = randomInt(OTP_MIN_VALUE, OTP_MAX_EXCLUSIVE).toString();
-      await this.sendOtpMail(email, otpCode);
+      const sendResult = await this.sendOtpMail(email, otpCode);
+      if (sendResult && 'debugOtp' in sendResult && sendResult.debugOtp) {
+        debugOtp = sendResult.debugOtp;
+      }
       await repo.save(
         repo.create({
           email,
@@ -196,6 +224,7 @@ export class AuthService {
       success: true,
       message: 'OTP sent to your email.',
       retryAfterSeconds: OTP_RESEND_SECONDS,
+      ...(debugOtp ? { debugOtp } : {}),
     };
   }
 
@@ -282,6 +311,7 @@ export class AuthService {
     }
 
     const hashedPassword = await bcrypt.hash(dto.password, 10);
+    let debugOtp: string | undefined;
 
     await this.otps.manager.transaction(async (manager) => {
       await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', [email]);
@@ -314,7 +344,14 @@ export class AuthService {
         throw new HttpException(OTP_RESEND_MESSAGE, 429);
       }
       const otpCode = randomInt(OTP_MIN_VALUE, OTP_MAX_EXCLUSIVE).toString();
-      await this.sendOtpMail(email, otpCode, 'Ez-HealthCare - Ma xac thuc dang ky');
+      const sendResult = await this.sendOtpMail(
+        email,
+        otpCode,
+        'Ez-HealthCare - Ma xac thuc dang ky',
+      );
+      if (sendResult && 'debugOtp' in sendResult && sendResult.debugOtp) {
+        debugOtp = sendResult.debugOtp;
+      }
 
       await otpRepo.save(
         otpRepo.create({
@@ -332,6 +369,7 @@ export class AuthService {
       success: true,
       message: 'Mã OTP xác thực đã được gửi đến email của bạn.',
       retryAfterSeconds: OTP_RESEND_SECONDS,
+      ...(debugOtp ? { debugOtp } : {}),
     };
   }
 

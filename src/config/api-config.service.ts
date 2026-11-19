@@ -86,25 +86,23 @@ export class ApiConfigService {
     return { url: url || undefined, from, authorization: authorization || undefined };
   }
 
-  get smtp() {
-    const user = this.value('SMTP_USER').trim();
-    const pass = this.value('SMTP_PASS').trim();
-    const host = this.value('SMTP_HOST', 'smtp.gmail.com').trim();
-    const port = this.portNumber('SMTP_PORT', 465);
-    const secure = this.value('SMTP_SECURE', port === 465 ? 'true' : 'false') === 'true';
-    const from = this.value(
-      'SMTP_FROM',
-      user ? `Ez-HealthCare <${user}>` : OTP_DEFAULT_FROM,
+  get brevo() {
+    const apiKey = this.value('BREVO_API_KEY').trim();
+    const senderEmail = this.value(
+      'MAIL_SENDER_EMAIL',
+      this.value('OTP_FROM', OTP_DEFAULT_FROM),
     ).trim();
+    const senderName = this.value('MAIL_SENDER_NAME', 'Ez-HealthCare').trim();
     return {
-      enabled: Boolean(user && pass),
-      host,
-      port,
-      secure,
-      user,
-      pass,
-      from,
+      apiKey,
+      senderEmail,
+      senderName,
+      enabled: Boolean(apiKey),
     };
+  }
+
+  get otpDebug(): boolean {
+    return this.boolean('OTP_DEBUG');
   }
 
   get queueIssuanceWindows() {
@@ -159,7 +157,8 @@ export class ApiConfigService {
     void this.jwtSecret;
     void this.corsOrigins;
     void this.otpDelivery;
-    void this.smtp;
+    void this.brevo;
+    void this.otpDebug;
     void this.queueIssuanceWindows;
     void this.receptionEta;
     void this.receptionDeskShiftsEnabled;
